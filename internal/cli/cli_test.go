@@ -30,6 +30,10 @@ func TestRun(t *testing.T) {
 		{[]string{"add", "shop", "8080", "--network", "shared"}, 1, "", "not a valid route network"},
 		{[]string{"add", "-C", t.TempDir(), "8080"}, 1, "", "deriving the name from the worktree"},
 		{[]string{"devcontainer", "shop"}, 2, "", "usage: berthlight devcontainer"},
+		{[]string{"skill"}, 2, "", "usage: berthlight skill install"},
+		{[]string{"skill", "nope"}, 2, "", "usage: berthlight skill install"},
+		{[]string{"skill", "install", "--agent", "vim"}, 1, "", `unknown agent "vim"`},
+		{[]string{"skill", "show"}, 0, "name: berthlight", ""},
 		{[]string{"devcontainer", "shop", "web"}, 1, "", "not a number"},
 		{[]string{"devcontainer", "-C", t.TempDir(), "shop", "8080"}, 1, "", "no devcontainer.json"},
 		{[]string{"add", "Shop!", "8080"}, 1, "", "not a valid label"},
@@ -162,5 +166,44 @@ func TestParseInterspersed(t *testing.T) {
 	pos, err := parseInterspersed(fs, []string{"shop", "8080", "--target", "web"})
 	if err != nil || len(pos) != 2 || pos[0] != "shop" || pos[1] != "8080" || *target != "web" {
 		t.Errorf("got %q, %q, %v", pos, *target, err)
+	}
+}
+
+func TestSkillInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows
+	t.Setenv("PATH", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"skill", "install"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "no coding agent found") {
+		t.Errorf("nothing detected: %d %q", code, errOut.String())
+	}
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+	out.Reset()
+	if code := Run([]string{"skill", "install"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "installed "+filepath.Join("~", ".claude", "skills", "berthlight", "SKILL.md")+" (Claude Code)") {
+		t.Errorf("detected install: %d %q %q", code, out.String(), errOut.String())
+	}
+	proj := t.TempDir()
+	out.Reset()
+	if code := Run([]string{"skill", "install", "--agent", "all", "--project", "-C", proj}, &out, &errOut); code != 0 {
+		t.Fatalf("project install: %d %q", code, errOut.String())
+	}
+	for _, want := range []string{"(Claude Code)", "(Codex, OpenCode, pi)", "Commit the skill"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("project install output lacks %q: %q", want, out.String())
+		}
+	}
+	for _, p := range []string{".claude/skills/berthlight/SKILL.md", ".agents/skills/berthlight/SKILL.md"} {
+		if _, err := os.Stat(filepath.Join(proj, filepath.FromSlash(p))); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	out.Reset()
+	if code := Run([]string{"skill", "install", "--agent", "all", "--project", "-C", proj}, &out, &errOut); code != 0 || strings.Count(out.String(), "unchanged") != 2 {
+		t.Errorf("second install: %q", out.String())
+	}
+	out.Reset()
+	if code := Run([]string{"skill", "uninstall", "--agent", "all", "--project", "-C", proj}, &out, &errOut); code != 0 || strings.Count(out.String(), "removed") != 2 {
+		t.Errorf("uninstall: %q %q", out.String(), errOut.String())
 	}
 }

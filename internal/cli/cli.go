@@ -134,6 +134,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 		"status":       cmdStatus,
 		"devcontainer": cmdDevcontainer,
+		"skill":        cmdSkill,
 	}
 	switch args[0] {
 	case "version", "--version":
@@ -178,6 +179,7 @@ Commands:
   up                           start the proxy (add does this too)
   down                         stop the proxy
   url                          print the URL of the current worktree's dev server
+  skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
   version                      print the version
 
 Environment:

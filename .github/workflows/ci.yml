@@ -33,6 +33,19 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go run ./cmd/berthlight url
+      # R8, R11: the skill installs on every platform, and the installed
+      # copy passes the Agent Skills reference validator.
+      - name: Install the agent skill
+        shell: bash
+        run: go run ./cmd/berthlight skill install --agent all --project -C "$RUNNER_TEMP/project"
+      - name: Validate the installed skill
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q "git+https://github.com/agentskills/agentskills.git@f130f348f502d9804278a617f86929846896d2e9#subdirectory=skills-ref"
+          for d in "$RUNNER_TEMP"/project/.claude/skills/berthlight "$RUNNER_TEMP"/project/.agents/skills/berthlight; do
+            "$RUNNER_TEMP/venv/bin/skills-ref" validate "$d"
+          done
 
   integration:
     # amd64 keeps the bare runtime name, which branch protection requires.
