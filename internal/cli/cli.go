@@ -124,11 +124,12 @@ func imageTag() string {
 
 // Run runs one command and returns the exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
+	args, noHeader := stripFlag(args, "no-header")
 	// The header, on a terminal (PRD 0001, R12). Without arguments, and
 	// for `demo`, the scene is the show and plays to its end; otherwise it
 	// animates only while the command works, and stops on its last frame
 	// at the command's first output.
-	if wantsHeader(args) {
+	if !noHeader && wantsHeader(args) {
 		h := tui.StartHeader(stdout, currentVersion())
 		show := len(args) == 0 || args[0] == "demo"
 		switch {
@@ -199,6 +200,9 @@ var errUsage = errors.New("usage")
 func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage: berthlight <command> [flags]
 
+Global flags:
+  --no-header                  leave out the header (the little demo scene)
+
 Commands:
   add [<name>] <port>          route <name>.localhost to a container's port
                                (without <name>: the current worktree's name)
@@ -220,11 +224,26 @@ Environment:
   BERTHLIGHT_BASE        base domains, comma-separated (default localhost)
   BERTHLIGHT_IMAGE       proxy image
   BERTHLIGHT_STATE_DIR   where routes are kept
-  BERTHLIGHT_NO_ANIMATION  set to draw no progress animation (also off in CI and without a terminal)
+  BERTHLIGHT_NO_ANIMATION  set to draw no header or progress animation (also off in CI and without a terminal)
 `)
 }
 
 // newFlags returns a flag set that prints its errors to stderr.
+// stripFlag removes a global boolean flag, given as --name or -name
+// anywhere on the command line, and reports whether it was there.
+func stripFlag(args []string, name string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == "--"+name || a == "-"+name {
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, found
+}
+
 // wantsHeader says whether a command shows the header: not the ones whose
 // output scripts read (url, JSON, the skill's text) and not the proxy.
 func wantsHeader(args []string) bool {
