@@ -12,8 +12,8 @@ import (
 // drop in and bounce. Below, at the waterline, a little sailing boat
 // passes; a small octopus surfaces and swipes a tentacle at it, misses
 // just behind the stern with a splash, and sinks back until only its eyes
-// show; the boat moors at the jetty of a little village, whose windows
-// then light up one by one. Original pixel
+// show; the boat moors at a quay with Amsterdam canal houses, whose dark
+// windows then light up one by one. Original pixel
 // art, drawn at the C64's chunky resolution.
 
 // Scene size in pixels. On a terminal each pixel is a half cell (two per
@@ -58,30 +58,44 @@ var (
 		"nooooooooo",
 		".oooooooo.",
 	}
-	// Three little houses on the shore; 'L' is a window, dark until the
-	// boat has moored, then lit.
+	// Three Amsterdam canal houses of different heights on the quay: a step
+	// gable in red brick, a tall bell gable in grey, a lower neck gable,
+	// each with white trim. 'L' is a window, 'n' a door.
 	houses = [][]string{
 		{
-			"..r..",
-			".rrr.",
+			"..w..",
+			".wrw.",
+			"wrrrw",
+			"rLrLr",
 			"rrrrr",
-			".LiL.",
-			".ini.",
+			"rLrLr",
+			"rrrrr",
+			"rLrLr",
+			"rrrrr",
+			"rLnLr",
 		},
 		{
-			"...d.",
-			"..od.",
-			".ooo.",
+			".www.",
+			"weeew",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLnLe",
+		},
+		{
+			"..w..",
+			".wow.",
+			"wooow",
+			"oLoLo",
 			"ooooo",
-			".LwL.",
-			".wnw.",
-		},
-		{
-			"..p..",
-			".ppp.",
-			"ppppp",
-			".LiL.",
-			".ini.",
+			"oLoLo",
+			"ooooo",
+			"oLnLo",
 		},
 	}
 	// A small octopus's head; its tentacles are drawn apart, so they move.
@@ -216,13 +230,19 @@ func Frame(t time.Duration) *image.RGBA {
 	return img
 }
 
-// drawShore draws the land on the right with its jetty and the village,
-// whose windows light up one after another once the boat has moored.
+// drawShore draws the quay on the right with its jetty and the canal
+// houses, whose windows light up one after another once the boat has
+// moored.
 func drawShore(set func(int, int, color.RGBA), s float64) {
+	// The quay: a stone edge over a brick wall down into the water.
 	for x := shoreX; x < SceneW; x++ {
-		set(x, waterY-1, c64['g'])
+		set(x, waterY-1, c64['i'])
 		for y := waterY; y < SceneH; y++ {
-			set(x, y, c64['n'])
+			c := c64['r']
+			if (x+y)%3 == 0 {
+				c = c64['n']
+			}
+			set(x, y, c)
 		}
 	}
 	for x := jettyX; x < shoreX; x++ {
@@ -233,16 +253,16 @@ func drawShore(set func(int, int, color.RGBA), s float64) {
 	}
 	for k, house := range houses {
 		x, y := houseAt(k)
-		window := c64['d']
-		if s >= lightAt(k) {
-			window = c64['y']
-		}
 		for sy, row := range house {
 			for sx := 0; sx < len(row); sx++ {
 				switch row[sx] {
 				case '.':
 				case 'L':
-					set(x+sx, y+sy, window)
+					c := c64['d']
+					if s >= windowLightAt(k, sx, sy) {
+						c = c64['y']
+					}
+					set(x+sx, y+sy, c)
 				default:
 					set(x+sx, y+sy, c64[row[sx]])
 				}
@@ -251,14 +271,37 @@ func drawShore(set func(int, int, color.RGBA), s float64) {
 	}
 }
 
-// houseAt is where house k's top left is: side by side on the shore,
-// standing on the grass.
+// houseAt is where house k's top left is: side by side on the quay.
 func houseAt(k int) (int, int) {
 	return shoreX + k*5, waterY - 1 - len(houses[k])
 }
 
-// lightAt is when house k's window lights up.
-func lightAt(k int) float64 { return arriveAt + 0.2*float64(k) }
+// windowLightAt is when the window at (sx, sy) of house k is lit: it is
+// evening, so some are lit from the start; the others light up one by
+// one, in reading order, once the boat has moored.
+func windowLightAt(k, sx, sy int) float64 {
+	n := 0 // windows not lit from the start, before this one
+	for hk, house := range houses {
+		for y, row := range house {
+			for x := 0; x < len(row); x++ {
+				if row[x] != 'L' {
+					continue
+				}
+				litEarly := (hk*3+y+x)%3 == 0
+				if hk == k && y == sy && x == sx {
+					if litEarly {
+						return 0
+					}
+					return arriveAt + 0.035*float64(n)
+				}
+				if !litEarly {
+					n++
+				}
+			}
+		}
+	}
+	return math.Inf(1)
+}
 
 func drawSprite(set func(int, int, color.RGBA), sprite []string, x, y int) {
 	for sy, row := range sprite {

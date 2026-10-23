@@ -33,6 +33,7 @@ func TestSceneEndsAtRest(t *testing.T) {
 		t.Error("the tentacle is out at the end")
 	}
 	last := Frame(SceneLength)
+	dark, lit := 0, 0
 	for k, house := range houses {
 		x, y := houseAt(k)
 		for sy, row := range house {
@@ -41,16 +42,28 @@ func TestSceneEndsAtRest(t *testing.T) {
 					continue
 				}
 				if last.RGBAAt(x+wx, y+sy) != c64['y'] {
-					t.Errorf("house %d's window is dark at the end", k)
+					t.Errorf("house %d's window (%d, %d) is dark at the end", k, wx, sy)
 				}
 				if Frame(0).RGBAAt(x+wx, y+sy) == c64['y'] {
-					t.Errorf("house %d's window is lit at the start", k)
+					lit++
+				} else {
+					dark++
 				}
 			}
 		}
-		if x+len(house[0]) > SceneW {
+		if x+len(house[0]) > SceneW || y < 0 {
 			t.Errorf("house %d does not fit", k)
 		}
+	}
+	if lit == 0 || dark == 0 {
+		t.Errorf("at the start %d windows are lit and %d dark; want some of each", lit, dark)
+	}
+	heights := map[int]bool{}
+	for _, h := range houses {
+		heights[len(h)] = true
+	}
+	if len(heights) != len(houses) {
+		t.Error("the houses are not of different heights")
 	}
 	// After SceneLength the frame does not change, so a stopped header
 	// and a static one look the same.
