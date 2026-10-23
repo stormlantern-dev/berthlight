@@ -38,6 +38,10 @@ type Checker struct {
 	// Timeout bounds each probe. Default 10 s: a dev server's first
 	// request may compile the application.
 	Timeout time.Duration
+	// Reload is how long to wait before asking again when the proxy has
+	// not loaded a route: it rereads routes.json every 500 ms, so a route
+	// added a moment ago may not be in yet. Default 600 ms.
+	Reload time.Duration
 }
 
 // Report is the outcome of a check.
@@ -76,6 +80,9 @@ func (c Checker) Check(ctx context.Context, t *route.Table) Report {
 	}
 	if c.Timeout == 0 {
 		c.Timeout = 10 * time.Second
+	}
+	if c.Reload == 0 {
+		c.Reload = 600 * time.Millisecond
 	}
 	var rep Report
 	rep.Proxy = c.checkProxy()
@@ -139,6 +146,13 @@ func (c Checker) checkRoute(ctx context.Context, rs *RouteStatus, proxyNets []st
 		return
 	}
 	code, reason, err := c.probe(ctx, host)
+	if err == nil && reason == proxy.ErrNoRoute {
+		select { // a route added a moment ago: give the proxy its reload
+		case <-ctx.Done():
+		case <-time.After(c.Reload):
+			code, reason, err = c.probe(ctx, host)
+		}
+	}
 	switch {
 	case err != nil:
 		var ne net.Error

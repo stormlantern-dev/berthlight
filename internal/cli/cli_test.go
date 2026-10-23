@@ -425,3 +425,18 @@ func TestReportFits(t *testing.T) {
 		t.Error("fit")
 	}
 }
+
+// TestChangesNewRoutes: a route that appears is news when it is up, not
+// while it is still starting.
+func TestChangesNewRoutes(t *testing.T) {
+	c := Config{Port: 7480, ProxyName: "berthlight", Bases: []string{"localhost"}}
+	prev := status.Report{}
+	rep := status.Report{Routes: []status.RouteStatus{
+		{Route: route.Route{Name: "shop"}, OK: true, Detail: "HTTP 200"},
+		{Route: route.Route{Name: "blog"}, Detail: "starting"},
+	}}
+	got := changes(&prev, rep, c)
+	if len(got) != 1 || got[0] != "shop.localhost is up" {
+		t.Errorf("changes: %q", got)
+	}
+}
