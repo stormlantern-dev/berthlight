@@ -145,6 +145,10 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # ubuntu-latest ships Homebrew but leaves it off PATH.
+      - name: Put brew on PATH
+        if: runner.os == 'Linux'
+        run: echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
       - run: |
           brew install stormlantern-dev/tap/berthlight
           berthlight version | grep -F "${GITHUB_REF_NAME#v}"
