@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -48,12 +49,24 @@ func classify(err error) string {
 	switch {
 	case errors.As(err, &dns):
 		return ErrUnresolved
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case refused(err):
 		return ErrRefused
 	case errors.As(err, &ne) && ne.Timeout():
 		return ErrTimeout
 	}
 	return ErrUpstream
+}
+
+// wsaeconnrefused is Windows' "connection refused", which syscall does not
+// map to ECONNREFUSED.
+const wsaeconnrefused = 10061
+
+func refused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var errno syscall.Errno
+	return goruntime.GOOS == "windows" && errors.As(err, &errno) && errno == wsaeconnrefused
 }
 
 // Handler routes requests by Host header. It is safe for concurrent use;
