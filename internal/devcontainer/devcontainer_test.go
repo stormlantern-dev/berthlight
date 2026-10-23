@@ -124,3 +124,19 @@ func TestPublishes(t *testing.T) {
 		}
 	}
 }
+
+func TestProject(t *testing.T) {
+	for _, src := range []string{`{"image":"x"}`, `{"initializeCommand": {"init": "touch .env"}}`, `not json`} {
+		if p, ok := Project([]byte(src)); ok {
+			t.Errorf("%s: project %q", src, p)
+		}
+	}
+	// Every golden file is wired for project shop, in its own form.
+	goldens, _ := filepath.Glob("testdata/*.golden.jsonc")
+	for _, g := range goldens {
+		b, _ := os.ReadFile(g)
+		if p, ok := Project(b); !ok || p != "shop" {
+			t.Errorf("%s: %q %v, want shop", g, p, ok)
+		}
+	}
+}

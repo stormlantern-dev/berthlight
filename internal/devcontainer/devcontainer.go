@@ -449,3 +449,52 @@ func removeItem(l list, i int) {
 	}
 	l.remove(i)
 }
+
+// Project returns the project name a wired devcontainer.json gives
+// berthlight: the --project of its initializeCommand, in the array form
+// Edit writes or inside the object form. It reports false for a file
+// berthlight has not wired.
+func Project(src []byte) (string, bool) {
+	v, err := hujson.Parse(src)
+	if err != nil {
+		return "", false
+	}
+	obj, ok := v.Value.(*hujson.Object)
+	if !ok {
+		return "", false
+	}
+	e := &editor{obj: obj}
+	i := e.find(obj, "initializeCommand")
+	if i < 0 {
+		return "", false
+	}
+	cmd := obj.Members[i].Value.Value
+	if o, ok := cmd.(*hujson.Object); ok {
+		j := e.find(o, CommandKey)
+		if j < 0 {
+			return "", false
+		}
+		cmd = o.Members[j].Value.Value
+	}
+	var words []string
+	switch x := cmd.(type) {
+	case *hujson.Array:
+		for _, el := range x.Elements {
+			s, _ := stringValue(el)
+			words = append(words, s)
+		}
+	case hujson.Literal:
+		if x.Kind() == '"' {
+			words = strings.Fields(x.String())
+		}
+	}
+	if !isOurs(words) {
+		return "", false
+	}
+	for k := 2; k+1 < len(words); k++ {
+		if words[k] == "--project" {
+			return words[k+1], true
+		}
+	}
+	return "", false
+}

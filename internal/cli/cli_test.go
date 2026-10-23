@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -438,5 +439,42 @@ func TestChangesNewRoutes(t *testing.T) {
 	got := changes(&prev, rep, c)
 	if len(got) != 1 || got[0] != "shop.localhost is up" {
 		t.Errorf("changes: %q", got)
+	}
+}
+
+// TestURLUsesWiredProject: in a worktree whose devcontainer.json is wired
+// for project shop, url names the route the devcontainer gets, though the
+// directory is webshop.
+func TestURLUsesWiredProject(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "webshop")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	os.MkdirAll(filepath.Join(main, ".devcontainer"), 0o755)
+	os.WriteFile(filepath.Join(main, ".devcontainer", "devcontainer.json"), []byte(`{"image": "x"}`), 0o644)
+	git("init", "-q")
+	var out bytes.Buffer
+	if code := Run([]string{"url", "-C", main}, &out, &out); code != 0 || strings.TrimSpace(out.String()) != "http://webshop.localhost:7480" {
+		t.Fatalf("before wiring: %d %q", code, out.String())
+	}
+	Run([]string{"devcontainer", "-C", main, "shop", "8080"}, &out, &out)
+	git("add", "-A")
+	git("commit", "-q", "-m", "wire")
+	git("worktree", "add", "-q", filepath.Join(root, "webshop-fix-login"))
+	for dir, want := range map[string]string{main: "http://shop.localhost:7480", filepath.Join(root, "webshop-fix-login"): "http://shop-fix-login.localhost:7480"} {
+		out.Reset()
+		if code := Run([]string{"url", "-C", dir}, &out, &out); code != 0 || strings.TrimSpace(out.String()) != want {
+			t.Errorf("url -C %s: %d %q, want %s", dir, code, out.String(), want)
+		}
+	}
+	out.Reset()
+	Run([]string{"url", "-C", main, "--project", "other"}, &out, &out)
+	if strings.TrimSpace(out.String()) != "http://other.localhost:7480" {
+		t.Errorf("--project does not win: %q", out.String())
 	}
 }
