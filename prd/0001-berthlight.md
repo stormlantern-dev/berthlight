@@ -10,7 +10,7 @@
 ## Summary
 
 A small command-line tool, installed once per machine, that gives every
-devcontainer's dev server a stable name such as `http://gallery.localhost:<port>`
+devcontainer's dev server a stable name such as `http://gallery.localhost:7480`
 instead of a published host port. Devcontainers stop publishing ports at all.
 One proxy, bound to loopback, routes each name to the right container over a
 container network. The same binary installs an agent skill into popular coding
@@ -74,8 +74,9 @@ it is the same every time, and it can be written into instructions.
 ```
 host                                       container runtime (rootless)
 ───────────────────────────────────────    ─────────────────────────────────────────
-browser ─► 127.0.0.1:<proxy port> ───────► berthlight proxy ─► gallery:8089  (network bl-gallery)
-                                                         └─► ib-main:8080  (network bl-ib-main)
+browser ─► 127.0.0.1:7480 ──────────────► berthlight proxy ─► gallery:8089         (network bl-gallery)
+                                                         ├─► shop:8080            (network bl-shop)
+                                                         └─► shop-fix-login:8080  (network bl-shop-fix-login)
 berthlight CLI ─ writes routes, certs ───► (read-only mount)
              └─ creates networks, starts proxy, connects it to each network
 ```
@@ -105,7 +106,11 @@ reachable through the proxy by name, and neither can open a connection to the
 other.
 
 **R2 (MUST). A least-privilege proxy.** The proxy container:
-- publishes one port, on `127.0.0.1` only (and `::1`);
+- publishes one port, on `127.0.0.1` only (and `::1`): **7480** by default,
+  configurable. HTTP and HTTPS share it; the proxy tells them apart by the
+  first byte of the connection (a TLS handshake starts with `0x16`). Once a
+  certificate is configured (R7), plain HTTP gets a redirect to HTTPS on the
+  same port;
 - mounts no runtime socket;
 - runs as a non-root user, with all capabilities dropped, a read-only root
   filesystem and `no-new-privileges`;
@@ -121,13 +126,79 @@ restarting, and WebSockets (hot reload) pass through.
 *Fit:* a route added while the proxy runs serves within 2 seconds; a WebSocket
 echo through the proxy works.
 
-**R4 (MUST). Names that need no setup.** Names live under `*.localhost` by
+**R4 (MUST). Names that need no setup.** Names live under `localhost` by
 default, which browsers and systemd-resolved send to loopback without any DNS
-change. Multi-level names (`main.ib.localhost`) work, so one project can have
-one name per worktree.
+change. Every name follows the naming convention below, so it works with one
+wildcard certificate, with any DNS provider and ACME CA, and in the usual
+places an application keeps its own URL.
 
 *Fit:* on a fresh CI runner, a route is reachable with `curl` by name, with no
 change to `/etc/hosts` or DNS.
+
+### Naming convention
+
+A full name is `<label>.<base>`.
+
+- **`<base>`** is `localhost` by default, or a zone the user controls, such as
+  `dev.example.com` (R7). Nothing else: `.local` belongs to mDNS
+  ([RFC 6762](https://www.rfc-editor.org/rfc/rfc6762)), `.test` and
+  `.internal` need DNS set up on every machine and cannot get a publicly
+  trusted certificate, and real TLDs such as `.dev` and `.app` belong to their
+  registry and are on the browsers' HSTS preload list.
+- **`<label>`** is exactly **one DNS label**: `<project>` for a project's main
+  worktree, `<project>-<worktree>` for any other worktree. For example
+  `shop.localhost`, `shop-fix-login.localhost`, `gallery.localhost`.
+
+Why one label:
+
+- **Certificates.** A wildcard certificate covers one label:
+  `*.dev.example.com` covers `shop-fix-login.dev.example.com` but not
+  `fix-login.shop.dev.example.com`. One label means one certificate for every
+  project and worktree, from any ACME CA.
+- **OAuth.** Identity providers do not accept wildcard redirect URIs, so each
+  name that signs in must be registered by hand. The main worktree's name,
+  `<project>.<base>`, never changes; register that one, once per provider.
+  Other worktrees use the project's development sign-in bypass. Providers
+  differ on whether they accept plain `http` on a name other than
+  `localhost`; an `https` name under the user's own domain (R7) is accepted
+  by any provider that accepts `https`.
+- **Host checks.** Dev servers that check the `Host` header (Vite's
+  `server.allowedHosts`, Django's `ALLOWED_HOSTS`, Rails' `config.hosts` and
+  others) accept a domain suffix. Allowing `.<base>` once covers every
+  worktree. The proxy passes the original `Host` header through unchanged.
+- **Cookies.** Cookies without a `Domain` attribute stay with their exact
+  name, so worktrees do not share sessions. Projects must not set `Domain` to
+  the base.
+
+Rules for a label:
+
+- Letters, digits and hyphens only, lowercase, 1 to 63 characters, starting
+  with a letter and not ending with a hyphen. No underscores: they are not
+  valid in host names, and some URL and cookie parsers reject them.
+- No `--` in the third and fourth position, which is reserved for
+  internationalised names (`xn--`).
+- `<project>` comes from `--project`, else from the main worktree's
+  directory name. The skill (R8) suggests a short one (`shop` for a
+  directory named `webshop`), because it is typed and appears in every
+  worktree's name.
+- `<worktree>` is the worktree's directory name with the project's directory
+  name stripped from the front (`webshop-fix-login` gives
+  `fix-login`). Not the branch: a worktree can switch branch, and its name
+  must not change when it does.
+- Anything else is lowercased, every run of invalid characters becomes one
+  hyphen, and a label longer than 63 characters is cut to 58 and given a
+  hyphen and four hex characters of a hash of the full name, so two long
+  names stay distinct.
+- `add` refuses a name another route holds, unless `--replace`.
+
+`berthlight url` prints the current worktree's full URL, so scripts and
+`.env` files can take it instead of hard-coding it.
+
+*Fit:* table tests for the derivation (main and other worktrees, prefix
+stripping, slashes, underscores, non-ASCII, `--` in position 3–4, length
+cut-off with hash); an integration test where two worktrees of one project
+get distinct names, both served under one wildcard certificate in the R7
+test.
 
 **R5 (MUST). Devcontainer wiring.** `berthlight devcontainer <name> <port>`
 edits a project's `devcontainer.json` in place: adds the `runArgs` for network
@@ -145,8 +216,9 @@ proxy not running, network missing, name does not resolve.
 *Fit:* tests for each failure, each with its own message.
 
 **R7 (SHOULD). Publicly trusted HTTPS for a domain the user owns.**
-`berthlight cert` obtains a wildcard certificate (`*.dev.example.com`) from an
-ACME CA (Let's Encrypt by default) with the DNS-01 challenge, through
+`berthlight cert` obtains a wildcard certificate (`*.dev.example.com`), which
+covers every name because names are one label (R4), from any ACME CA
+(Let's Encrypt by default) with the DNS-01 challenge, through
 [lego](https://github.com/go-acme/lego) and any of its DNS providers. The DNS
 credentials stay with the CLI on the host, read from the provider's usual
 source (for example, Application Default Credentials for Google Cloud DNS,
@@ -175,7 +247,9 @@ GoReleaser:
 - `.deb`, `.rpm` and `.apk` packages and archives on the GitHub release;
 - an AUR `-bin` package;
 - a Scoop manifest in the organisation's bucket;
-- the proxy image, multi-arch (amd64, arm64);
+- the proxy image, multi-arch (amd64, arm64). The CLI reads the image
+  reference from its configuration, with the release's image as default, so
+  a move of the registry or organisation needs no new release;
 - checksums signed with cosign (keyless) and GitHub build provenance
   attestations.
 
@@ -192,8 +266,13 @@ once the CLI is stable.
   Docker and rootless Podman, including a real `devcontainer up` with the
   Dev Container CLI.
 - macOS and Windows: build, unit tests, `skill install`, and the CLI paths that
-  do not need Linux containers (hosted runners for those platforms cannot run
-  them).
+  do not need Linux containers. Hosted runners for those platforms cannot run
+  Linux containers: the macOS runners are virtual machines without nested
+  virtualisation, and the Windows runners run Windows containers only.
+- macOS integration tests (SHOULD): on a self-hosted runner on the author's
+  Mac, against Docker Desktop, OrbStack and Podman machine. Started by hand
+  or by a release tag only, never by a pull request, so code from a fork
+  never runs there.
 - A GoReleaser snapshot build on every pull request.
 
 *Fit:* the workflows exist and pass on main.
@@ -233,24 +312,34 @@ once the CLI is stable.
   Checked for collisions on GitHub, Homebrew, AUR, npm, PyPI, crates.io,
   Docker Hub and winget, and in trade mark searches, on 2026-10-23. Decided by
   the operator, 2026-10-23.
+- **Module path `stormlantern.nl/berthlight`.** One namespace on the
+  operator's own domain for all modules, so a rename of the GitHub
+  organisation does not change import paths. Served from a small static site
+  that lists the modules and generates a page with the `go-import` tag for
+  each. Ecosystems without vanity paths follow the organisation: npm scopes are
+  independent of GitHub anyway, and Homebrew, Scoop and AUR sources follow
+  GitHub's redirect after a rename. Decided by the operator, 2026-10-23.
+- **Proxy port 7480.** High, not registered with IANA, free on the
+  operator's machines; HTTP and HTTPS share it (R2). Decided by the operator,
+  2026-10-23.
+- **One-label names per worktree** (R4, naming convention). Decided by the
+  operator, 2026-10-23, with the condition that names work with ACME and
+  ordinary application configuration and do not depend on one vendor.
+- **macOS testing on the operator's Mac** through a self-hosted runner (R11).
+  Paid hosted macOS runners have the same limit as the free ones; bare-metal
+  Mac hosting costs more than this project warrants. Decided by the operator,
+  2026-10-23.
 
 ## Open questions
 
 - **Proxy engine.** Own proxy on Go's standard library
   (`httputil.ReverseProxy`, which handles WebSocket upgrades), or Traefik with
   its file provider, or Caddy. The own proxy keeps it to one binary and one
-  image, with no configuration to translate; Traefik and Caddy are proven.
-  Proposed: own proxy.
-- **Go module path.** `github.com/stormlantern-dev/berthlight` changes if the
-  organisation is renamed. A vanity path such as
-  `go.stormlantern.nl/berthlight` never changes, but needs a DNS record and a
-  static page serving the `go-import` meta tag.
-- **Proxy port.** One fixed high port, configurable. Which default.
-- **Naming scheme for worktrees.** `<worktree>.<project>.localhost`, with what
-  rule for the default when no name is given.
+  image, with no configuration to translate, and makes the shared HTTP/HTTPS
+  port (R2) simple; Traefik and Caddy are proven. Proposed: own proxy.
 - **macOS runtimes.** Docker Desktop, OrbStack and Podman machine each run
   containers in a VM; publishing on the host's loopback behaves slightly
-  differently in each. Needs testing on a Mac; CI cannot.
+  differently in each. To be found out on the self-hosted runner (R11).
 
 ## What would change this plan
 
