@@ -1,0 +1,14 @@
+// Development container for berthlight itself. It publishes no ports:
+// berthlight has no dev server of its own.
+{
+  "name": "berthlight",
+  "image": "mcr.microsoft.com/devcontainers/go:2-1.27-trixie",
+  // Rootless Podman: root in the container is the host user.
+  "remoteUser": "root",
+  "containerUser": "root",
+  "updateRemoteUserUID": false,
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "go mod download"
+}
