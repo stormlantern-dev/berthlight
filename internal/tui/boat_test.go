@@ -18,17 +18,17 @@ func cells(s style, line string) int {
 func TestRenderKeepsWidth(t *testing.T) {
 	for _, s := range []style{unicodeStyle, asciiStyle} {
 		want := -1
-		for _, frac := range []float64{-1, 0, 0.3, 0.5, 0.99, 1, 2} {
+		for pos := -1; pos <= water+1; pos++ {
 			for frame := 0; frame < 10; frame++ {
 				for _, st := range []state{sailing, berthed, stranded} {
-					line := s.render(frame, frac, st, "")
+					line := s.render(frame, pos, st, "")
 					if !strings.Contains(line, s.boat) {
 						t.Fatalf("no boat in %q", line)
 					}
 					if n := cells(s, line); want < 0 {
 						want = n
 					} else if n != want {
-						t.Errorf("frac %v frame %d state %d: %d cells, want %d: %q", frac, frame, st, n, want, line)
+						t.Errorf("pos %d frame %d state %d: %d cells, want %d: %q", pos, frame, st, n, want, line)
 					}
 				}
 			}
@@ -41,11 +41,11 @@ func TestRenderStates(t *testing.T) {
 	if got := s.render(0, 0, sailing, "starting"); !strings.HasPrefix(got, "  ⛵") || !strings.Contains(got, "┃  starting") {
 		t.Errorf("start: %q", got)
 	}
-	if got := s.render(3, 0.2, berthed, "berthed"); got != "  "+strings.Repeat("▁", water-2)+"⛵⚓  berthed" {
+	if got := s.render(3, 4, berthed, "berthed"); got != "  "+strings.Repeat("▁", water-2)+"⛵⚓  berthed" {
 		t.Errorf("berthed: %q", got)
 	}
 	// Waves move from frame to frame; the boat does not.
-	a, b := s.render(0, 0.5, sailing, ""), s.render(1, 0.5, sailing, "")
+	a, b := s.render(0, 11, sailing, ""), s.render(1, 11, sailing, "")
 	if a == b || strings.Index(a, "⛵") != strings.Index(b, "⛵") {
 		t.Errorf("frames %q and %q", a, b)
 	}
@@ -109,6 +109,20 @@ func TestSailAndBerth(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q", want)
 		}
+	}
+	// The boat glides: its position never jumps more than a few cells
+	// between frames, and the last stretch is sailed cell by cell.
+	prev, frames := -1, 0
+	for _, f := range strings.Split(got, "\x1b[?2026h")[1:] {
+		pos := utf8.RuneCountInString(f[:strings.Index(f, "⛵")]) - len("\r\x1b[2K") - 2
+		if prev >= 0 && (pos < prev || pos-prev > 4) {
+			t.Errorf("boat went from cell %d to %d", prev, pos)
+		}
+		prev = pos
+		frames++
+	}
+	if prev != water-2 || frames < water/2 {
+		t.Errorf("%d frames, boat ends at cell %d", frames, prev)
 	}
 	if !strings.HasSuffix(got, "\n\x1b[?25h") {
 		t.Errorf("output does not end with a new line and the cursor shown: %q", got[max(len(got)-40, 0):])

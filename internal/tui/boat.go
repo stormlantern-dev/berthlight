@@ -22,8 +22,12 @@ const (
 	water = 24
 	// delay before the first frame: quick operations draw nothing.
 	delay = 150 * time.Millisecond
-	// tick is the time between frames.
-	tick = 120 * time.Millisecond
+	// tick is the time between frames while sailing.
+	tick = 80 * time.Millisecond
+	// glideTick is the time per cell on the last stretch to the berth,
+	// sailed when the work is done so the eye can follow it: at most about
+	// two thirds of a second.
+	glideTick = 30 * time.Millisecond
 )
 
 // style is how a terminal can draw the boat.
@@ -68,13 +72,15 @@ const (
 	stranded
 )
 
-// render draws one frame: the water, the boat at frac (0 to 1) of the
-// crossing, the dock, and msg.
-func (s style) render(frame int, frac float64, st state, msg string) string {
-	frac = min(max(frac, 0), 1)
-	pos := int(frac * float64(water-s.boatWidth))
+// last is the boat's position, in cells, at the berth.
+func (s style) last() int { return water - s.boatWidth }
+
+// render draws one frame: the water, the boat pos cells from the start,
+// the dock, and msg.
+func (s style) render(frame, pos int, st state, msg string) string {
+	pos = min(max(pos, 0), s.last())
 	if st == berthed {
-		pos = water - s.boatWidth
+		pos = s.last()
 	}
 	c := func(code, text string) string {
 		if !s.color || text == "" {
@@ -129,7 +135,8 @@ type Progress struct {
 	start time.Time
 
 	mu    sync.Mutex
-	frac  float64
+	frac  float64 // where the boat is heading, 0 to 1
+	pos   float64 // where it is drawn, in cells
 	msg   string
 	frame int
 	drawn bool
@@ -202,6 +209,7 @@ func (p *Progress) finish(st state, msg string) {
 	if p == nil {
 		return
 	}
+	took := time.Since(p.start)
 	close(p.stop)
 	<-p.done
 	p.mu.Lock()
@@ -209,10 +217,19 @@ func (p *Progress) finish(st state, msg string) {
 	if !p.drawn {
 		return
 	}
-	if st == berthed && msg != "" {
-		msg = fmt.Sprintf("%s in %.1fs", msg, time.Since(p.start).Seconds())
+	if st == berthed {
+		// Sail the rest of the way where the eye can follow.
+		for int(p.pos) < p.style.last() {
+			p.pos = float64(int(p.pos) + 1)
+			p.frame++
+			p.draw(p.style.render(p.frame, int(p.pos), sailing, p.msg))
+			time.Sleep(glideTick)
+		}
+		if msg != "" {
+			msg = fmt.Sprintf("%s in %.1fs", msg, took.Seconds())
+		}
 	}
-	p.draw(p.style.render(p.frame, p.frac, st, msg))
+	p.draw(p.style.render(p.frame, int(p.pos), st, msg))
 	fmt.Fprint(p.w, "\n\x1b[?25h") // new line, show the cursor
 }
 
@@ -232,13 +249,23 @@ func (p *Progress) run() {
 			p.drawn = true
 		}
 		p.frame++
-		p.draw(p.style.render(p.frame, p.frac, sailing, p.msg))
+		p.advance()
+		p.draw(p.style.render(p.frame, int(p.pos), sailing, p.msg))
 		p.mu.Unlock()
 		select {
 		case <-p.stop:
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// advance moves the boat part of the way to where it is heading, so it
+// glides rather than jumps.
+func (p *Progress) advance() {
+	target := p.frac * float64(p.style.last())
+	if p.pos < target {
+		p.pos = min(p.pos+max((target-p.pos)*0.3, 0.5), target)
 	}
 }
 
