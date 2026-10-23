@@ -4,10 +4,10 @@
 # release the way users do and runs it.
 #
 # No stored secrets. The tap and bucket token comes from the release GitHub
-# App, whose key is in Cloud KMS, and the AUR key from Secret Manager, both
-# reached through Workload Identity Federation (.github/actions). Repository
-# variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER, TAP_KMS_KEY_VERSION and
-# AUR_KEY_SECRET_VERSION.
+# App, and the AUR push is signed with an SSH key; both keys live in Cloud
+# KMS and are used through Workload Identity Federation (.github/actions).
+# Repository variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER,
+# TAP_KMS_KEY_VERSION and AUR_KMS_KEY_RING.
 name: Release
 
 on:
@@ -55,12 +55,12 @@ jobs:
           client-id: ${{ vars.TAP_APP_CLIENT_ID }}
           workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
           kms-key-version: ${{ vars.TAP_KMS_KEY_VERSION }}
-      - name: Fetch the AUR key
+      - name: SSH agent with the AUR key
         id: aur
-        uses: ./.github/actions/aur-key
+        uses: ./.github/actions/aur-ssh
         with:
           workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
-          secret-version: ${{ vars.AUR_KEY_SECRET_VERSION }}
+          key-ring: ${{ vars.AUR_KMS_KEY_RING }}
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3
@@ -68,17 +68,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
-          AUR_KEY: ${{ steps.aur.outputs.path }}
-      # Revoke rather than wait an hour for it to expire; delete the key file.
-      - name: Revoke the token, remove the AUR key
+          AUR_SSH_AGENT: ${{ steps.aur.outputs.agent }}
+      # Revoke rather than wait an hour for it to expire; stop the agent.
+      - name: Revoke the token, stop the agent
         if: always()
         env:
           TOKEN: ${{ steps.app_token.outputs.token }}
+          AGENT_PID: ${{ steps.aur.outputs.pid }}
         run: |
           if [ -n "$TOKEN" ]; then
             curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" https://api.github.com/installation/token || true
           fi
-          rm -f "${RUNNER_TEMP}/aur-key"
+          if [ -n "$AGENT_PID" ]; then SSH_AGENT_PID="$AGENT_PID" ssh-agent -k > /dev/null || true; fi
+          rm -f gha-creds-*.json
 
       # Attestations on private repositories need GitHub Enterprise Cloud.
       - name: Build provenance for the release files
