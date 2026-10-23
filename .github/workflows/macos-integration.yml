@@ -1,0 +1,58 @@
+# Integration tests on macOS (PRD 0001, R11), on a self-hosted runner on the
+# operator's Mac: Docker Desktop, OrbStack and Podman machine. Never started
+# by a pull request, so code from a fork never runs there. By hand, or by a
+# release tag once the repository variable MACOS_RUNNER is "true" (set it
+# after registering the runner, with the labels self-hosted, macOS, ARM64).
+name: macOS integration
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-integration
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: integration (${{ matrix.name }})
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.MACOS_RUNNER == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # one Mac, one proxy port range
+      matrix:
+        include:
+          - name: docker desktop
+            runtime: docker
+            context: desktop-linux
+          - name: orbstack
+            runtime: docker
+            context: orbstack
+          - name: podman machine
+            runtime: podman
+            context: ""
+    runs-on: [self-hosted, macOS, ARM64]
+    env:
+      BERTHLIGHT_RUNTIME: ${{ matrix.runtime }}
+      BERTHLIGHT_IMAGE: localhost/berthlight:test
+      BERTHLIGHT_REQUIRE_DEVCONTAINER: "1"
+      DOCKER_CONTEXT: ${{ matrix.context }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm install -g @devcontainers/cli@0.89.0
+      - name: Build the proxy image
+        run: ${{ matrix.runtime }} build -t "$BERTHLIGHT_IMAGE" .
+      - name: Integration tests
+        run: go test -tags integration -count=1 -v -timeout 20m ./test/integration

@@ -1,0 +1,155 @@
+# Publishes a release from a version tag (PRD 0001, R9): binaries, packages,
+# the Homebrew cask, the Scoop manifest, the AUR package and the multi-arch
+# proxy image, with signed checksums and build provenance. Then installs the
+# release the way users do and runs it.
+#
+# Secrets: TAP_GITHUB_TOKEN and AUR_KEY (see .goreleaser.yaml).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/stormlantern-dev/berthlight
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the GitHub release
+      packages: write # the proxy image on ghcr.io
+      id-token: write # keyless cosign signatures and attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+
+      # Attestations on private repositories need GitHub Enterprise Cloud.
+      - name: Build provenance for the release files
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/checksums.txt
+
+      - name: Image digest
+        id: image
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{json .Manifest}}' | jq -r .digest)
+          test -n "$digest" && test "$digest" != null
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Sign the image
+        run: cosign sign --yes "$IMAGE@${{ steps.image.outputs.digest }}"
+      - name: Build provenance for the image
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+  # R9 fit: install the release as users do and run it.
+  install-deb:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Download, verify and install the .deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" -p '*_amd64.deb'
+          if [ "${{ github.event.repository.private }}" != true ]; then
+            gh attestation verify berthlight_*_amd64.deb --repo "$GH_REPO"
+          fi
+          sudo dpkg -i berthlight_*_amd64.deb
+          berthlight version | grep -F "${GITHUB_REF_NAME#v}"
+
+  # Homebrew and Scoop download from public URLs, so these run once the
+  # repository is public.
+  install-brew:
+    needs: release
+    if: ${{ !github.event.repository.private }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: |
+          brew install stormlantern-dev/tap/berthlight
+          berthlight version | grep -F "${GITHUB_REF_NAME#v}"
+
+  install-scoop:
+    needs: release
+    if: ${{ !github.event.repository.private }}
+    runs-on: windows-latest
+    steps:
+      - shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri https://get.scoop.sh -OutFile install-scoop.ps1
+          .\install-scoop.ps1 -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop bucket add stormlantern https://github.com/stormlantern-dev/scoop-bucket
+          scoop install stormlantern/berthlight
+          $v = berthlight version
+          if ($v -notmatch [regex]::Escape($env:GITHUB_REF_NAME.TrimStart('v'))) { throw "unexpected version: $v" }
+
+  install-image:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the image signature and run it
+        run: |
+          ref="$IMAGE:${GITHUB_REF_NAME#v}"
+          cosign verify "$ref" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          docker run --rm --entrypoint /berthlight "$ref" version | grep -F "${GITHUB_REF_NAME#v}"

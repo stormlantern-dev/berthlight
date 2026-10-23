@@ -14,6 +14,21 @@ Codex, OpenCode and pi.
 
 **Status:** early development. See [the PRD](prd/0001-berthlight.md) and #1.
 
+## Install
+
+```sh
+brew install stormlantern-dev/tap/berthlight                 # macOS, Linux
+scoop bucket add stormlantern https://github.com/stormlantern-dev/scoop-bucket
+scoop install stormlantern/berthlight                        # Windows
+paru -S berthlight-bin                                       # Arch
+```
+
+Debian, Fedora and Alpine packages and plain archives are on each
+[release](https://github.com/stormlantern-dev/berthlight/releases). Every
+release has checksums signed with cosign and GitHub build provenance; the
+release notes say how to verify them. The proxy image,
+`ghcr.io/stormlantern-dev/berthlight:<version>`, is signed the same way.
+
 ## Use
 
 Wire a project's devcontainer once, in its main worktree:
