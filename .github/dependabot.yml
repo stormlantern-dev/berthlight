@@ -18,7 +18,7 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: gomod
-    directory: /
+    directories: ["/", "/tools/guides"]
     schedule:
       interval: weekly
     groups:
