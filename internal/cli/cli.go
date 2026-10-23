@@ -172,13 +172,13 @@ Commands:
   add [<name>] <port>          route <name>.localhost to a container's port
                                (without <name>: the current worktree's name)
   rm <name>                    remove a route
-  ls                           list routes
-  status                       check the proxy and each route, say what is wrong
+  ls [--json]                  list routes
+  status [--watch] [--json]    check the proxy and each route, say what is wrong
   devcontainer <project> <port>
                                wire the project's devcontainer.json to berthlight
   up                           start the proxy (add does this too)
   down                         stop the proxy
-  url                          print the URL of the current worktree's dev server
+  url [--copy]                 print the URL of the current worktree's dev server
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
   version                      print the version
 

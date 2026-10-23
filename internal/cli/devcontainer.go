@@ -13,6 +13,7 @@ import (
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/diff"
 	"stormlantern.nl/berthlight/internal/naming"
+	"stormlantern.nl/berthlight/internal/tui"
 )
 
 func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
@@ -70,7 +71,8 @@ func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Rebuild the container. The dev server must listen on 0.0.0.0:%d inside it.\n", port)
 	c, cerr := LoadConfig()
 	if label, lerr := naming.LabelFor(*dir, project); cerr == nil && lerr == nil {
-		fmt.Fprintf(stdout, "This worktree's URL: %s\n", urlFor(c, label))
+		u := urlFor(c, label)
+		fmt.Fprintf(stdout, "This worktree's URL: %s\n", tui.NewTerm(stdout).Link(u, u))
 	}
 	return nil
 }

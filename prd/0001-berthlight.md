@@ -298,8 +298,10 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
 - **Watch.** `berthlight status --watch` keeps the status (R6) on screen and
   current: a progress indicator in the tab or taskbar while a route starts
   (OSC 9;4), the tab title as a summary ("berthlight · 3/3 ok"), and a
-  desktop notification when a route comes up or goes down (OSC 9 and 777;
-  OSC 99 in Kitty).
+  desktop notification when a route comes up or goes down (OSC 9 in Ghostty,
+  WezTerm and iTerm2; OSC 99 in Kitty). Progress goes only to terminals known
+  to support it (Ghostty, Windows Terminal), since elsewhere OSC 9 shows as a
+  notification.
 - **Graphics (MAY).** Where the Kitty graphics protocol is available (Kitty,
   Ghostty), a pixel-art boat in place of the Unicode one.
 - **Plain without a terminal.** Animations and escape sequences go to
@@ -310,7 +312,7 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
 
 *Fit:* golden tests of the rendered frames (width stays constant while the
 boat moves, berthed and failed states); a test that piped output has no
-escape sequences; a test per escape sequence (OSC 8, 52, 9;4, 9, 777, 99)
+escape sequences; a test per escape sequence (OSC 8, 52, 2, 9;4, 9, 99)
 against its specification; a manual check in Ghostty and Kitty, recorded on
 the tracking issue.
 

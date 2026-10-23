@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"stormlantern.nl/berthlight/internal/naming"
@@ -107,7 +107,8 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 	if err := route.Save(c.StateDir, tab); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s -> %s\n", urlFor(c, r.Name), r.Addr())
+	u := urlFor(c, r.Name)
+	fmt.Fprintf(stdout, "%s -> %s\n", tui.NewTerm(stdout).Link(u, u), r.Addr())
 	fmt.Fprintf(stdout, "Join the container to it: --network %s --network-alias %s\n", r.Network(), r.Target)
 	return nil
 }
@@ -180,6 +181,7 @@ func removeRoute(c Config, run rt.Runtime, tab *route.Table, r route.Route, stde
 
 func cmdLs(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("ls", stderr)
+	asJSON := fs.Bool("json", false, "print the routes as JSON")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -191,16 +193,26 @@ func cmdLs(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *asJSON {
+		out := struct {
+			Routes []routeJSON `json:"routes"`
+		}{Routes: []routeJSON{}}
+		for _, r := range tab.Routes {
+			out.Routes = append(out.Routes, newRouteJSON(c, r))
+		}
+		return writeJSON(stdout, out)
+	}
 	if len(tab.Routes) == 0 {
 		fmt.Fprintln(stdout, "No routes. Add one with: berthlight add <name> <port>")
 		return nil
 	}
-	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tURL\tTARGET\tNETWORK")
+	term := tui.NewTerm(stdout)
+	rows := [][]tui.Cell{{{Text: "NAME"}, {Text: "URL"}, {Text: "TARGET"}, {Text: "NETWORK"}}}
 	for _, r := range tab.Routes {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, urlFor(c, r.Name), r.Addr(), r.Network())
+		u := urlFor(c, r.Name)
+		rows = append(rows, []tui.Cell{{Text: r.Name}, {Text: u, Show: term.Link(u, u)}, {Text: r.Addr()}, {Text: r.Network()}})
 	}
-	return w.Flush()
+	return tui.Table(stdout, rows)
 }
 
 func cmdUp(args []string, stdout, stderr io.Writer) error {
@@ -313,6 +325,7 @@ func cmdURL(args []string, stdout, stderr io.Writer) error {
 	base := fs.String("base", "", "base domain (default: the first of $BERTHLIGHT_BASE, or localhost)")
 	port := fs.Int("port", 0, "proxy port (default: $BERTHLIGHT_PORT, or 7480)")
 	dir := fs.String("C", ".", "directory inside the worktree")
+	cp := fs.Bool("copy", false, "also put the URL on the clipboard, through the terminal (OSC 52)")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -330,7 +343,21 @@ func cmdURL(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, urlFor(c, label))
+	u := urlFor(c, label)
+	out := tui.NewTerm(stdout)
+	fmt.Fprintln(stdout, out.Link(u, u))
+	if *cp {
+		// The clipboard sequence goes to whichever stream is the terminal,
+		// so `berthlight url --copy > file` still copies.
+		term := out
+		if !term.TTY() {
+			term = tui.NewTerm(stderr)
+		}
+		if !term.Copy(u) {
+			return errors.New("--copy needs a terminal: it asks the terminal to set the clipboard")
+		}
+		fmt.Fprintln(stderr, "copied to the clipboard (if the terminal allows it)")
+	}
 	return nil
 }
 
