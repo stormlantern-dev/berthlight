@@ -311,7 +311,8 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   and on its last frame at the command's first output, so it never holds a
   command up; the last frame in half blocks on other truecolor terminals;
   one line of text elsewhere. Without arguments, and as `berthlight demo`, it
-  plays to its end. Not for `url`, `proxy`, `skill show` or `--json`.
+  plays to its end. Not for `url`, `proxy`, `skill show` or `--json`, and
+  never with the global flag `--no-header`.
 - **Plain without a terminal.** Animations and escape sequences go to
   standard error, and only when it is a terminal; standard output is the same
   with or without one. No animation with `TERM=dumb`, in CI, or with

@@ -53,7 +53,7 @@ berthlight status --watch   # keep it on screen; a notification when a route com
 
 In a modern terminal (Ghostty, Kitty, WezTerm, iTerm2, Windows Terminal) URLs
 are clickable, a small demo scene heads each command (animated in Kitty and
-Ghostty; `berthlight demo` plays it in full), and `--watch` shows a summary in the tab title and progress in
+Ghostty; `berthlight demo` plays it in full; `--no-header` leaves it out), and `--watch` shows a summary in the tab title and progress in
 the tab while something is down. Piped or redirected, the output is plain
 text, and `ls --json` and `status --json` give scripts and agents a stable
 format.

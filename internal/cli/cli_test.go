@@ -380,3 +380,20 @@ func TestWantsHeader(t *testing.T) {
 		}
 	}
 }
+
+func TestNoHeaderFlag(t *testing.T) {
+	t.Setenv("BERTHLIGHT_STATE_DIR", t.TempDir())
+	for _, args := range [][]string{{"--no-header", "ls"}, {"ls", "--no-header"}, {"-no-header", "ls"}} {
+		var out, errOut bytes.Buffer
+		if code := Run(args, &out, &errOut); code != 0 || !strings.Contains(out.String(), "No routes") {
+			t.Errorf("Run(%q) = %d, %q %q", args, code, out.String(), errOut.String())
+		}
+	}
+	got, found := stripFlag([]string{"status", "--no-header", "--json"}, "no-header")
+	if !found || strings.Join(got, " ") != "status --json" {
+		t.Errorf("stripFlag: %q %v", got, found)
+	}
+	if _, found := stripFlag([]string{"ls"}, "no-header"); found {
+		t.Error("stripFlag found a flag that is not there")
+	}
+}
