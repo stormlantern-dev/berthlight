@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -21,17 +22,17 @@ func TestSceneEndsAtRest(t *testing.T) {
 			t.Errorf("letter %d already in at the start", i)
 		}
 	}
-	if x := subXAt(arriveTime); x != dockedX {
+	if x := subXAt(arriveAt); x != dockedX {
 		t.Errorf("submarine at %v when it should be moored at %d", x, dockedX)
 	}
-	if tentacleReach(0) != 0 || tentacleReach(SceneLength.Seconds()) != 0 || tentacleReach(1.2) == 0 {
+	if tentacleReach(0) != 0 || tentacleReach(SceneLength.Seconds()) != 0 || tentacleReach(1.9) == 0 {
 		t.Error("the tentacle reaches at the wrong time")
 	}
 	last := Frame(SceneLength)
-	if last.RGBAAt(lampX, waterY-5) != c64['w'] {
+	if last.RGBAAt(lampX, waterY-7) != c64['w'] {
 		t.Error("the lamp is not lit at the end")
 	}
-	if Frame(0).RGBAAt(lampX, waterY-5) == c64['w'] {
+	if Frame(0).RGBAAt(lampX, waterY-7) == c64['w'] {
 		t.Error("the lamp is lit at the start")
 	}
 	// After SceneLength the frame does not change, so a stopped header
@@ -72,7 +73,7 @@ func TestKittyImage(t *testing.T) {
 		t.Fatalf("%d chunks", len(chunks))
 	}
 	w, h := SceneW*kittyScale, SceneH*kittyScale
-	if want := "a=T,f=32,o=z,s=640,v=160,i=7,p=1,c=80,r=10,C=1,q=2,m=1"; chunks[0][1] != want || w != 640 || h != 160 {
+	if want := fmt.Sprintf("a=T,f=32,o=z,s=%d,v=%d,i=7,p=1,c=%d,r=%d,C=1,q=2,m=1", w, h, SceneW, HeaderRows); chunks[0][1] != want {
 		t.Errorf("first chunk keys %q, want %q", chunks[0][1], want)
 	}
 	var data string
@@ -101,7 +102,7 @@ func TestKittyImage(t *testing.T) {
 	if len(raw) != w*h*4 {
 		t.Fatalf("%d bytes of pixels, want %d", len(raw), w*h*4)
 	}
-	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 5}, {dockedX + 3, cruiseY + 2}, {SceneW - 1, SceneH - 1}} {
+	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 7}, {octopusX + 4, octopusY + 2}, {SceneW - 1, SceneH - 1}} {
 		c := img.RGBAAt(p[0], p[1])
 		i := ((p[1]*kittyScale+3)*w + p[0]*kittyScale + 3) * 4
 		if raw[i] != c.R || raw[i+1] != c.G || raw[i+2] != c.B || raw[i+3] != 0xff {
@@ -173,7 +174,36 @@ func TestHeaderPrintKeepsAnimating(t *testing.T) {
 	time.Sleep(3 * frameInterval)
 	h.Stop()
 	// Frames drawn after the text move up past it: header rows plus two.
-	if !strings.Contains(buf.String(), "\x1b7\x1b[12A\r\x1b_G") {
+	if !strings.Contains(buf.String(), fmt.Sprintf("\x1b7\x1b[%dA\r\x1b_G", HeaderRows+2)) {
 		t.Errorf("no frame drawn above the printed text")
+	}
+}
+
+// TestStory checks the scene tells its story: the submarine stays clear of
+// the octopus's head, the tentacle reaches up behind it, and it moors on
+// the surface alongside the pier.
+func TestStory(t *testing.T) {
+	headTop := octopusY - 1 // with its outline
+	for ms := 0; ms <= int(SceneLength/time.Millisecond); ms += 10 {
+		s := float64(ms) / 1000
+		x, y := submarinePos(s)
+		bottom := y + len(submarine) - 1
+		over := x+float64(len(submarine[0])) > float64(octopusX) && x < float64(octopusX+len(octopusHead[0]))
+		if over && bottom >= headTop {
+			t.Fatalf("at %.2fs the submarine (rows %d-%d) touches the octopus (from row %d)", s, y, bottom, headTop)
+		}
+		if r := tentacleReach(s); r > 0 {
+			tip := octopusX + len(octopusHead[0]) - 3 + r/2
+			if tip >= int(x) && tip < int(x)+len(submarine[0]) && octopusY-r <= bottom {
+				t.Fatalf("at %.2fs the tentacle (column %d, up to row %d) hits the submarine", s, tip, octopusY-r)
+			}
+		}
+	}
+	x, y := submarinePos(SceneLength.Seconds())
+	if int(x) != dockedX || y != surfacedY {
+		t.Errorf("ends at (%v, %d), want moored at (%d, %d)", x, y, dockedX, surfacedY)
+	}
+	if int(x)+len(submarine[0]) > pierX {
+		t.Error("moored into the pier")
 	}
 }

@@ -15,7 +15,7 @@ func TestWritePreview(t *testing.T) {
 	if out == "" {
 		t.Skip("SCENE_PREVIEW not set")
 	}
-	const scale, n = 6, 9
+	const scale, n = 6, 11
 	strip := image.NewRGBA(image.Rect(0, 0, SceneW*scale, (SceneH*scale+4)*n))
 	for i := 0; i < n; i++ {
 		f := Frame(time.Duration(i) * SceneLength / (n - 1))
