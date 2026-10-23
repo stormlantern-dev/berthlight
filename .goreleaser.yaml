@@ -1,10 +1,11 @@
 # Release configuration (PRD 0001, R9). The release workflow runs it on a
 # version tag; CI runs it as a snapshot on every pull request (R11).
 #
-# Publishing needs, as secrets of the release workflow:
-#   TAP_GITHUB_TOKEN  contents: write on stormlantern-dev/homebrew-tap and
-#                     stormlantern-dev/scoop-bucket
-#   AUR_KEY           private SSH key of the AUR account that owns berthlight-bin
+# Publishing needs, from the release workflow (no stored secrets there; see
+# .github/actions):
+#   TAP_GITHUB_TOKEN  a one-hour release App token with contents: write on
+#                     stormlantern-dev/homebrew-tap and scoop-bucket
+#   AUR_KEY           path of the AUR account's SSH key, read from Secret Manager
 version: 2
 
 project_name: berthlight

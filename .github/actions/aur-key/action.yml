@@ -1,0 +1,56 @@
+name: Fetch the AUR key
+description: >
+  Write the AUR account's SSH key, read from Secret Manager through
+  Workload Identity Federation, to a private file, and give its path.
+
+# The AUR only accepts pushes over SSH with a key on the account, so a key
+# has to exist. It lives in Secret Manager rather than in a GitHub secret:
+# the same WIF provider as the release App (see app-token) is the only
+# principal with secretAccessor on it, so only release.yml on a v* tag, or
+# verify-release-credentials.yml on main, can read it. The file is in
+# RUNNER_TEMP, mode 0600; callers delete it at the end of the job.
+#
+# The calling job needs `permissions: id-token: write`.
+
+inputs:
+  workload-identity-provider:
+    description: Full WIF provider name (repository variable TAP_WIF_PROVIDER).
+    required: true
+  secret-version:
+    description: Full Secret Manager version name (repository variable AUR_KEY_SECRET_VERSION).
+    required: true
+
+outputs:
+  path:
+    description: Path of the private key file.
+    value: ${{ steps.key.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      id: gcp
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        create_credentials_file: false
+
+    - name: Read the key from Secret Manager
+      id: key
+      shell: bash
+      env:
+        SECRET_VERSION: ${{ inputs.secret-version }}
+        GCP_TOKEN: ${{ steps.gcp.outputs.auth_token }}
+      run: |
+        set -euo pipefail
+        umask 077
+        path="${RUNNER_TEMP}/aur-key"
+        curl -fsS --retry 3 -H "Authorization: Bearer ${GCP_TOKEN}" \
+            "https://secretmanager.googleapis.com/v1/${SECRET_VERSION}:access" \
+          | jq -er .payload.data | openssl base64 -d -A > "$path"
+        while IFS= read -r line; do
+          [ -n "$line" ] && echo "::add-mask::${line}"
+        done < "$path"
+        ssh-keygen -y -f "$path" > /dev/null # a valid private key, or fail here
+        echo "path=${path}" >> "$GITHUB_OUTPUT"
+        echo "AUR key ready ($(ssh-keygen -l -f "$path" | cut -d' ' -f2))"
