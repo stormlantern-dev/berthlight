@@ -33,3 +33,34 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go run ./cmd/berthlight url
+
+  integration:
+    name: integration (${{ matrix.runtime }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [docker, podman]
+    runs-on: ubuntu-latest
+    env:
+      BERTHLIGHT_RUNTIME: ${{ matrix.runtime }}
+      BERTHLIGHT_IMAGE: localhost/berthlight:test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install Podman
+        if: matrix.runtime == 'podman'
+        run: |
+          command -v podman || { sudo apt-get update && sudo apt-get install -y podman; }
+          podman version
+      # Rootless Podman cannot load kernel modules from its user namespace;
+      # load the NAT ones its port forwarding needs.
+      - name: Load NAT modules
+        run: sudo modprobe -a nft_nat nft_masq nft_chain_nat || true
+      - name: Build the proxy image
+        run: ${{ matrix.runtime }} build -t "$BERTHLIGHT_IMAGE" .
+      - name: Integration tests
+        run: go test -tags integration -count=1 -v -timeout 10m ./test/integration
