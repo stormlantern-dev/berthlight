@@ -186,6 +186,7 @@ Environment:
   BERTHLIGHT_BASE        base domains, comma-separated (default localhost)
   BERTHLIGHT_IMAGE       proxy image
   BERTHLIGHT_STATE_DIR   where routes are kept
+  BERTHLIGHT_NO_ANIMATION  set to draw no progress animation (also off in CI and without a terminal)
 `)
 }
 

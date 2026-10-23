@@ -18,6 +18,7 @@ import (
 	"stormlantern.nl/berthlight/internal/proxy"
 	"stormlantern.nl/berthlight/internal/route"
 	rt "stormlantern.nl/berthlight/internal/runtime"
+	"stormlantern.nl/berthlight/internal/tui"
 )
 
 func urlFor(c Config, name string) string {
@@ -87,15 +88,21 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	if err := up(c, run); err != nil {
+	boat := tui.Start(stderr, "starting the proxy")
+	if err := up(c, run, boat); err != nil {
+		boat.Fail(err.Error())
 		return err
 	}
+	boat.Step(0.9, "joining "+r.Network())
 	if err := run.EnsureNetwork(r.Network(), "route"); err != nil {
+		boat.Fail(err.Error())
 		return err
 	}
 	if err := run.Connect(r.Network(), c.ProxyName); err != nil {
+		boat.Fail(err.Error())
 		return err
 	}
+	boat.Done(r.Name + " berthed")
 	tab.Put(r)
 	if err := route.Save(c.StateDir, tab); err != nil {
 		return err
@@ -158,7 +165,7 @@ func removeRoute(c Config, run rt.Runtime, tab *route.Table, r route.Route, stde
 			if err := run.RemoveContainer(c.ProxyName); err != nil {
 				return err
 			}
-			if err := up(c, run); err != nil {
+			if err := up(c, run, nil); err != nil {
 				return err
 			}
 		}
@@ -209,9 +216,12 @@ func cmdUp(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := up(c, run); err != nil {
+	boat := tui.Start(stderr, "starting the proxy")
+	if err := up(c, run, boat); err != nil {
+		boat.Fail(err.Error())
 		return err
 	}
+	boat.Done("proxy berthed")
 	fmt.Fprintf(stdout, "proxy %s listening on 127.0.0.1:%d\n", c.ProxyName, c.Port)
 	return nil
 }
@@ -220,7 +230,10 @@ func cmdUp(args []string, stdout, stderr io.Writer) error {
 // A stopped proxy is recreated rather than started: the proxy listens only
 // on the networks it has at start (see proxy.ListenStartupInterfaces), so it
 // must start on its own network alone.
-func up(c Config, run rt.Runtime) error {
+//
+// boat, which may be nil, shows the progress.
+func up(c Config, run rt.Runtime, boat *tui.Progress) error {
+	boat.Step(0.05, "looking for the proxy")
 	exists, running := run.ContainerState(c.ProxyName)
 	if exists && !running {
 		if err := run.RemoveContainer(c.ProxyName); err != nil {
@@ -233,9 +246,11 @@ func up(c Config, run rt.Runtime) error {
 			return err
 		}
 		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases}
+		boat.Step(0.15, "starting the proxy")
 		if err := run.StartProxy(spec); err != nil {
 			return err
 		}
+		boat.Step(0.5, "waiting for 127.0.0.1:"+strconv.Itoa(c.Port))
 		if err := waitForPort(c.Port, 10*time.Second); err != nil {
 			return err
 		}
@@ -244,7 +259,8 @@ func up(c Config, run rt.Runtime) error {
 	if err != nil {
 		return err
 	}
-	for _, r := range tab.Routes {
+	for i, r := range tab.Routes {
+		boat.Step(0.6+0.3*float64(i)/float64(len(tab.Routes)), "joining "+r.Network())
 		if err := run.EnsureNetwork(r.Network(), "route"); err != nil {
 			return err
 		}
