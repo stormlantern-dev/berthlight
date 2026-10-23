@@ -180,7 +180,7 @@ func Frame(t time.Duration) *image.RGBA {
 	}
 	drawSplashes(set, s)
 
-	// The boat, sailing in and mooring, bobbing on the waves.
+	// The boat, sailing in level on the water and mooring.
 	bx, by := boatPos(s)
 	drawSprite(set, boat, bx, by)
 
@@ -237,14 +237,10 @@ func boatXAt(s float64) float64 {
 	return from + (to-from)*u
 }
 
-// boatPos is where the boat is drawn: its column, and its top row with a
-// little bob on the waves while it sails.
+// boatPos is where the boat is drawn: its column, and its top row, which
+// stays level on the waterline.
 func boatPos(s float64) (int, int) {
-	y := boatY
-	if s < arriveAt && math.Sin(s*7) > 0.6 {
-		y-- // lifted by a wave
-	}
-	return int(math.Round(boatXAt(s))), y
+	return int(math.Round(boatXAt(s))), boatY
 }
 
 // octopusTop is the row of the octopus's head's top at time s: deep under

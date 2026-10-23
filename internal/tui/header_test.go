@@ -192,6 +192,9 @@ func TestStory(t *testing.T) {
 	for ms := 0; ms <= int(SceneLength/time.Millisecond); ms += 10 {
 		s := float64(ms) / 1000
 		bx, by := boatPos(s)
+		if by != boatY {
+			t.Fatalf("at %.2fs the boat is at row %d; it should stay level at %d", s, by, boatY)
+		}
 		top := octopusTop(s)
 		if top < waterY {
 			if !surfaced && bx < octopusX+len(octopusHead[0]) {
