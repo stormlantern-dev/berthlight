@@ -1,0 +1,9 @@
+{
+  "image": "node:22",
+  "initializeCommand": {
+    "env": "touch .env",
+    "cache": ["mkdir", "-p", ".cache"],
+    "berthlight": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"],
+  },
+  "runArgs": ["--network=bl-${localWorkspaceFolderBasename}", "--network-alias=bl-${localWorkspaceFolderBasename}"],
+}

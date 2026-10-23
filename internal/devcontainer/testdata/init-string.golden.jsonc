@@ -1,0 +1,8 @@
+{
+	"image": "node:22",
+	"initializeCommand": {
+		"init": "mkdir -p ${localEnv:HOME}/.cache/shop",
+		"berthlight": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"]
+	},
+	"runArgs": ["--network=bl-${localWorkspaceFolderBasename}", "--network-alias=bl-${localWorkspaceFolderBasename}"]
+}

@@ -14,6 +14,27 @@ Codex, OpenCode and pi.
 
 **Status:** early development. See [the PRD](prd/0001-berthlight.md) and #1.
 
+## Use
+
+Wire a project's devcontainer once, in its main worktree:
+
+```sh
+berthlight devcontainer shop 8080 --dry-run   # show the change
+berthlight devcontainer shop 8080             # make it
+```
+
+This edits `devcontainer.json` in place, keeping its comments: the container
+joins its own network (`bl-<folder name>`) instead of publishing a port, and
+an `initializeCommand` registers the route on the host before the container
+starts. Each worktree gets its own name: `shop.localhost` for the main
+worktree, `shop-fix-login.localhost` for a worktree in `webshop-fix-login`.
+The dev server must listen on `0.0.0.0` inside the container.
+
+```sh
+berthlight url      # this worktree's URL
+berthlight status   # the proxy and every route, and what is wrong if anything is
+```
+
 ## Development
 
 Open the repository in its devcontainer, or use Go 1.27 on the host:

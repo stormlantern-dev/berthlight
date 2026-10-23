@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,7 +24,14 @@ func TestRun(t *testing.T) {
 		{nil, 2, "", "Usage:"},
 		{[]string{"nope"}, 2, "", `unknown command "nope"`},
 		{[]string{"url", "-C", t.TempDir()}, 1, "", "git rev-parse"},
-		{[]string{"add", "shop"}, 2, "", "usage: berthlight add"},
+		{[]string{"add"}, 2, "", "usage: berthlight add"},
+		{[]string{"add", "a", "b", "c"}, 2, "", "usage: berthlight add"},
+		{[]string{"add", "shop"}, 1, "", `port "shop" is not a number`},
+		{[]string{"add", "shop", "8080", "--network", "shared"}, 1, "", "not a valid route network"},
+		{[]string{"add", "-C", t.TempDir(), "8080"}, 1, "", "deriving the name from the worktree"},
+		{[]string{"devcontainer", "shop"}, 2, "", "usage: berthlight devcontainer"},
+		{[]string{"devcontainer", "shop", "web"}, 1, "", "not a number"},
+		{[]string{"devcontainer", "-C", t.TempDir(), "shop", "8080"}, 1, "", "no devcontainer.json"},
 		{[]string{"add", "Shop!", "8080"}, 1, "", "not a valid label"},
 		{[]string{"add", "shop", "http"}, 1, "", "not a number"},
 		{[]string{"add", "shop", "70000"}, 1, "", "out of range"},
@@ -62,6 +72,75 @@ func TestLsShowsURLs(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("ls output %q lacks %q", out.String(), want)
 		}
+	}
+}
+
+// TestAddOwnership: add refuses a name or network another route holds
+// (PRD 0001, R4). Both checks come before the runtime is touched.
+func TestAddOwnership(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BERTHLIGHT_STATE_DIR", dir)
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "shop", Target: "bl-webshop", Port: 8080, NetworkName: "bl-webshop"})
+	if err := route.Save(dir, tab); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"add", "shop", "8080"}, `route "shop" already goes to bl-webshop:8080 on network bl-webshop; to take the name over, add --replace`},
+		{[]string{"add", "shop", "8080", "--target", "web", "--network", "bl-webshop"}, "already goes to"},
+		{[]string{"add", "gallery", "8089", "--network", "bl-webshop"}, `network bl-webshop already belongs to route "shop"`},
+		{[]string{"add", "gallery", "8089", "--target", "bl-webshop"}, `target "bl-webshop" is already route "shop"'s`},
+	}
+	for _, tt := range tests {
+		var out, errOut bytes.Buffer
+		if code := Run(tt.args, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), tt.want) {
+			t.Errorf("Run(%q) = %d, stderr %q, want %q", tt.args, code, errOut.String(), tt.want)
+		}
+	}
+}
+
+func TestDevcontainer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := "{\n  // dev image\n  \"image\": \"node:22\",\n  \"appPort\": 8080\n}\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"devcontainer", "-C", dir, "--dry-run", "shop", "8080"}, &out, &errOut); code != 0 {
+		t.Fatalf("dry run: %d %s", code, errOut.String())
+	}
+	for _, want := range []string{"--- a/", "+++ b/", `-  "appPort": 8080`, `+  "runArgs": [`, `"initializeCommand"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dry-run diff lacks %q:\n%s", want, out.String())
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != src {
+		t.Errorf("dry run wrote the file:\n%s", b)
+	}
+
+	out.Reset()
+	if code := Run([]string{"devcontainer", "-C", dir, "shop", "8080"}, &out, &errOut); code != 0 {
+		t.Fatalf("write: %d %s", code, errOut.String())
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "// dev image") || strings.Contains(string(b), "appPort") || !strings.Contains(string(b), "--network-alias=bl-${localWorkspaceFolderBasename}") {
+		t.Errorf("written file:\n%s", b)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 && runtime.GOOS != "windows" {
+		t.Errorf("mode changed to %v", info.Mode().Perm())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Run([]string{"devcontainer", "-C", dir, "--dry-run", "shop", "8080"}, &out, &errOut); code != 0 || out.Len() != 0 || !strings.Contains(errOut.String(), "already wired") {
+		t.Errorf("second dry run: %d %q %q", code, out.String(), errOut.String())
 	}
 }
 

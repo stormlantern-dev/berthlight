@@ -1,0 +1,5 @@
+{
+  "image": "node:22",
+  "runArgs": ["--init", "--network=bl-old", "--network-alias", "web", "--cap-drop=ALL"],
+  "appPort": ["127.0.0.1:8080:8080", 3000, "9229:9229"]
+}

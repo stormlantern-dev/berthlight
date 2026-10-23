@@ -2,7 +2,7 @@
 # Static, no shell, non-root (distroless's nonroot user, 65532).
 FROM docker.io/library/golang:1.27 AS build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=""

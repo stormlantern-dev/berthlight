@@ -11,14 +11,63 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/route"
 )
 
 type ctxKey struct{}
+
+// ErrorHeader marks a response the proxy made itself, not the dev server,
+// so `berthlight status` can tell a proxy 502 from an application's. Its
+// value is one of the Err* constants.
+const ErrorHeader = "Berthlight-Error"
+
+// Values of ErrorHeader.
+const (
+	// ErrNoRoute: no route for the name.
+	ErrNoRoute = "no-route"
+	// ErrUnresolved: the route's alias does not resolve on its network; no
+	// container with that alias is running there.
+	ErrUnresolved = "unresolved"
+	// ErrRefused: the container is there, but nothing listens on the port.
+	ErrRefused = "refused"
+	// ErrTimeout: the container did not answer in time.
+	ErrTimeout = "timeout"
+	// ErrUpstream: any other failure to reach the container.
+	ErrUpstream = "upstream"
+)
+
+// classify names the reason a request to a container failed.
+func classify(err error) string {
+	var dns *net.DNSError
+	var ne net.Error
+	switch {
+	case errors.As(err, &dns):
+		return ErrUnresolved
+	case refused(err):
+		return ErrRefused
+	case errors.As(err, &ne) && ne.Timeout():
+		return ErrTimeout
+	}
+	return ErrUpstream
+}
+
+// wsaeconnrefused is Windows' "connection refused", which syscall does not
+// map to ECONNREFUSED.
+const wsaeconnrefused = 10061
+
+func refused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var errno syscall.Errno
+	return goruntime.GOOS == "windows" && errors.As(err, &errno) && errno == wsaeconnrefused
+}
 
 // Handler routes requests by Host header. It is safe for concurrent use;
 // SetTable swaps the routes without interrupting requests in flight.
@@ -91,6 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set(ErrorHeader, ErrNoRoute)
 	w.WriteHeader(http.StatusNotFound)
 	fmt.Fprintf(w, "berthlight: no route for %q.\n\n", r.Host)
 	routes := h.Table().Routes
@@ -111,6 +161,7 @@ func (h *Handler) upstreamError(w http.ResponseWriter, r *http.Request, err erro
 	}
 	h.Logf("route %s -> %s: %v", rt.Name, rt.Addr(), err)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set(ErrorHeader, classify(err))
 	w.WriteHeader(http.StatusBadGateway)
 	fmt.Fprintf(w, "berthlight: route %q goes to %s, which did not answer:\n  %v\n\n", rt.Name, rt.Addr(), err)
 	fmt.Fprintln(w, "Is the dev server running, listening on 0.0.0.0 (not 127.0.0.1) inside its container, and on that port?")
