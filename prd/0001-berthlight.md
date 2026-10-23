@@ -330,13 +330,13 @@ once the CLI is stable.
   Mac hosting costs more than this project warrants. Decided by the operator,
   2026-10-23.
 
+- **Own proxy on Go's standard library** (`httputil.ReverseProxy`, which
+  handles WebSocket upgrades), not Traefik or Caddy. One binary and one image,
+  no configuration to translate, and the shared HTTP/HTTPS port (R2) is a few
+  lines. Decided by the operator, 2026-10-23.
+
 ## Open questions
 
-- **Proxy engine.** Own proxy on Go's standard library
-  (`httputil.ReverseProxy`, which handles WebSocket upgrades), or Traefik with
-  its file provider, or Caddy. The own proxy keeps it to one binary and one
-  image, with no configuration to translate, and makes the shared HTTP/HTTPS
-  port (R2) simple; Traefik and Caddy are proven. Proposed: own proxy.
 - **macOS runtimes.** Docker Desktop, OrbStack and Podman machine each run
   containers in a VM; publishing on the host's loopback behaves slightly
   differently in each. To be found out on the self-hosted runner (R11).
