@@ -66,6 +66,12 @@ func setup(t *testing.T) *env {
 func (e *env) name(s string) string { return e.id + "-" + s }
 
 func (e *env) cleanup() {
+	if e.t.Failed() {
+		logs, err := e.run.Run("logs", e.proxy)
+		e.t.Logf("proxy logs (%v):\n%s", err, logs)
+		insp, _ := e.run.Run("container", "inspect", "--format", "{{json .NetworkSettings}}", e.proxy)
+		e.t.Logf("proxy network settings: %s", insp)
+	}
 	out, _ := e.run.Run("ps", "-a", "--format", "{{.Names}}")
 	for _, n := range strings.Fields(out) {
 		if strings.HasPrefix(n, e.id) {
@@ -206,19 +212,20 @@ func TestProxy(t *testing.T) {
 		}
 	})
 
-	// R3: rm stops routing.
+	// R3: rm stops routing, and leaves the other routes alone.
 	e.cli("rm", b)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		code, _, _ := e.get(b + ".localhost")
+		code, body, err := e.get(b + ".localhost")
 		if code == 404 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("route %s still served after rm (status %d)", b, code)
+			t.Fatalf("route %s still served after rm: %d %q %v", b, code, body, err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	e.waitBody(a+".localhost", "hello-from-a", 2*time.Second)
 
 	// A stopped proxy comes back with its routes on `up`.
 	e.cli("down")

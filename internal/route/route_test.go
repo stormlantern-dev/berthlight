@@ -2,6 +2,7 @@ package route
 
 import (
 	"context"
+	goruntime "runtime"
 	"os"
 	"path/filepath"
 	"sync"
@@ -32,7 +33,7 @@ func TestSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0o644 {
+	if goruntime.GOOS != "windows" && fi.Mode().Perm() != 0o644 {
 		t.Errorf("mode %v, want 0644", fi.Mode().Perm())
 	}
 	if !got.Remove("shop") || got.Remove("shop") {
