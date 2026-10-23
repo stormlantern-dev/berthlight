@@ -2,13 +2,20 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"stormlantern.nl/berthlight/internal/route"
+	"stormlantern.nl/berthlight/internal/status"
+	"stormlantern.nl/berthlight/internal/tui"
 )
 
 func TestRun(t *testing.T) {
@@ -205,5 +212,150 @@ func TestSkillInstall(t *testing.T) {
 	out.Reset()
 	if code := Run([]string{"skill", "uninstall", "--agent", "all", "--project", "-C", proj}, &out, &errOut); code != 0 || strings.Count(out.String(), "removed") != 2 {
 		t.Errorf("uninstall: %q %q", out.String(), errOut.String())
+	}
+}
+
+// TestPlainWithoutTerminal: piped or redirected output has no escape
+// sequences (PRD 0001, R12).
+func TestPlainWithoutTerminal(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BERTHLIGHT_STATE_DIR", dir)
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "shop", Target: "web", Port: 8080})
+	if err := route.Save(dir, tab); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, args := range [][]string{{"ls"}, {"ls", "--json"}, {"url"}, {"skill", "show"}, {"help"}} {
+		f.Truncate(0)
+		f.Seek(0, 0)
+		Run(args, f, f)
+		b, _ := os.ReadFile(f.Name())
+		if bytes.ContainsRune(b, 0x1b) {
+			t.Errorf("berthlight %v wrote escape sequences to a file: %q", args, b)
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"url", "--copy"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "--copy needs a terminal") {
+		t.Errorf("url --copy without terminal: %d %q", code, errOut.String())
+	}
+}
+
+func TestLsJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BERTHLIGHT_STATE_DIR", dir)
+	var out bytes.Buffer
+	if code := Run([]string{"ls", "--json"}, &out, &out); code != 0 || strings.TrimSpace(out.String()) != "{\n  \"routes\": []\n}" {
+		t.Errorf("empty: %d %q", code, out.String())
+	}
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "shop", Target: "bl-webshop", Port: 8080, NetworkName: "bl-webshop"})
+	route.Save(dir, tab)
+	out.Reset()
+	Run([]string{"ls", "--json"}, &out, &out)
+	var got struct {
+		Routes []map[string]any `json:"routes"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"name": "shop", "url": "http://shop.localhost:7480", "target": "bl-webshop", "port": 8080.0, "network": "bl-webshop"}
+	if len(got.Routes) != 1 || !reflect.DeepEqual(got.Routes[0], want) {
+		t.Errorf("ls --json: %v", got.Routes)
+	}
+}
+
+func TestStatusJSON(t *testing.T) {
+	c := Config{Port: 7480, ProxyName: "berthlight", Bases: []string{"localhost"}}
+	rep := status.Report{Routes: []status.RouteStatus{
+		{Route: route.Route{Name: "shop", Target: "shop", Port: 8080}, URL: "http://shop.localhost:7480", OK: true, Detail: "HTTP 200"},
+		{Route: route.Route{Name: "gallery", Target: "gallery", Port: 8089}, URL: "http://gallery.localhost:7480", Detail: "nothing listens"},
+	}}
+	var out bytes.Buffer
+	writeJSON(&out, statusJSON(c, rep))
+	for _, want := range []string{`"ok": false`, `"proxy": {`, `"name": "berthlight"`, `"detail": "nothing listens"`, `"ok": true`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status --json lacks %s:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestWatch: notifications on changes only, a summary title, progress
+// while something is down, and the title restored at the end.
+func TestWatch(t *testing.T) {
+	c := Config{Port: 7480, ProxyName: "berthlight", Bases: []string{"localhost"}}
+	r := func(name string, ok bool) status.RouteStatus {
+		rs := status.RouteStatus{Route: route.Route{Name: name, Target: name, Port: 8080}, URL: "http://" + name + ".localhost:7480", OK: ok, Detail: "HTTP 200"}
+		if !ok {
+			rs.Detail = "nothing listens on port 8080"
+		}
+		return rs
+	}
+	reports := []status.Report{
+		{Routes: []status.RouteStatus{r("shop", true), r("gallery", false)}},
+		{Routes: []status.RouteStatus{r("shop", true), r("gallery", false)}},
+		{Routes: []status.RouteStatus{r("shop", true), r("gallery", true)}},
+		{Proxy: "proxy container berthlight does not exist", Routes: []status.RouteStatus{r("shop", false), r("gallery", false)}},
+	}
+	run := func(term func(w *bytes.Buffer) tui.Term) string {
+		ctx, cancel := context.WithCancel(context.Background())
+		ticks := make(chan time.Time)
+		i := 0
+		// One check per report, then one more that stops the watch.
+		check := func(context.Context) (status.Report, error) {
+			if i == len(reports) {
+				cancel()
+				return reports[i-1], nil
+			}
+			i++
+			return reports[i-1], nil
+		}
+		go func() {
+			for range len(reports) {
+				select {
+				case ticks <- time.Time{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		var buf bytes.Buffer
+		clock := func() time.Time { return time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC) }
+		if err := watchWith(ctx, ticks, check, c, &buf, term(&buf), clock); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+
+	got := run(func(w *bytes.Buffer) tui.Term { return tui.ForcedTerm(w, tui.Ghostty, "xterm-ghostty") })
+	notes := regexp.MustCompile(`\x1b\]9;berthlight: ([^\x07]*)\x07`).FindAllStringSubmatch(got, -1)
+	var said []string
+	for _, n := range notes {
+		said = append(said, n[1])
+	}
+	want := []string{"gallery.localhost is up", "proxy down: proxy container berthlight does not exist", "shop.localhost is down: nothing listens on port 8080", "gallery.localhost is down: nothing listens on port 8080"}
+	if !reflect.DeepEqual(said, want) {
+		t.Errorf("notifications:\n got %q\nwant %q", said, want)
+	}
+	for _, seq := range []string{"\x1b[22;0t", "\x1b]2;berthlight · 1/2 ok\x07", "\x1b]2;berthlight · 2/2 ok\x07", "\x1b]2;berthlight · proxy down\x07",
+		"\x1b]9;4;3;0\x07", "\x1b]9;4;0;0\x07", "\x1b]9;4;2;100\x07", "\x1b[23;0t", "\x1b]8;;http://shop.localhost:7480\x1b\\"} {
+		if !strings.Contains(got, seq) {
+			t.Errorf("watch output lacks %q", seq)
+		}
+	}
+	if !strings.HasSuffix(got, "\x1b]9;4;0;0\x07\x1b[23;0t") {
+		t.Errorf("watch does not end by clearing progress and restoring the title: %q", got[max(0, len(got)-40):])
+	}
+
+	plain := run(func(w *bytes.Buffer) tui.Term { return tui.NewTerm(w) })
+	wantPlain := "12:00:00 shop.localhost is up\n12:00:00 gallery.localhost is down: nothing listens on port 8080\n" +
+		"12:00:00 gallery.localhost is up\n" +
+		"12:00:00 proxy down: proxy container berthlight does not exist\n12:00:00 shop.localhost is down: nothing listens on port 8080\n12:00:00 gallery.localhost is down: nothing listens on port 8080\n"
+	if plain != wantPlain {
+		t.Errorf("plain watch:\n got %q\nwant %q", plain, wantPlain)
 	}
 }

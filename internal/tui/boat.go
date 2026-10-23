@@ -172,8 +172,7 @@ func Interactive(f *os.File) bool {
 	if goruntime.GOOS == "windows" && os.Getenv("WT_SESSION") == "" && os.Getenv("TERM_PROGRAM") == "" {
 		return false
 	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return isTerminal(f)
 }
 
 func detectStyle() style {

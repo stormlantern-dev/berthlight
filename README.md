@@ -46,9 +46,16 @@ worktree, `shop-fix-login.localhost` for a worktree in `webshop-fix-login`.
 The dev server must listen on `0.0.0.0` inside the container.
 
 ```sh
-berthlight url      # this worktree's URL
-berthlight status   # the proxy and every route, and what is wrong if anything is
+berthlight url              # this worktree's URL (--copy puts it on the clipboard)
+berthlight status           # the proxy and every route, and what is wrong if anything is
+berthlight status --watch   # keep it on screen; a notification when a route comes up or goes down
 ```
+
+In a modern terminal (Ghostty, Kitty, WezTerm, iTerm2, Windows Terminal) URLs
+are clickable, and `--watch` shows a summary in the tab title and progress in
+the tab while something is down. Piped or redirected, the output is plain
+text, and `ls --json` and `status --json` give scripts and agents a stable
+format.
 
 Coding agents can do the wiring too. `berthlight skill install` installs a
 skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
