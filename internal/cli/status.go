@@ -68,7 +68,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 	if *asJSON {
 		err = writeJSON(stdout, statusJSON(c, rep))
 	} else {
-		writeReport(stdout, tui.NewTerm(stdout), c, rep)
+		writeReport(stdout, tui.NewTerm(stdout), c, rep, 0)
 	}
 	if err != nil {
 		return err
@@ -126,9 +126,11 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-func writeReport(w io.Writer, term tui.Term, c Config, rep status.Report) {
+// writeReport writes the status. With a width, each line is cut to fit,
+// so that --watch, which redraws by counting lines, never has one wrap.
+func writeReport(w io.Writer, term tui.Term, c Config, rep status.Report, width int) {
 	if rep.Proxy != "" {
-		fmt.Fprintf(w, "proxy: %s\n", rep.Proxy)
+		fmt.Fprintf(w, "proxy: %s\n", fit(rep.Proxy, width-len("proxy: ")))
 	} else {
 		fmt.Fprintf(w, "proxy: %s listening on 127.0.0.1:%d\n", c.ProxyName, c.Port)
 	}
@@ -144,6 +146,15 @@ func writeReport(w io.Writer, term tui.Term, c Config, rep status.Report) {
 			state = rs.Detail
 		}
 		rows = append(rows, []tui.Cell{{Text: rs.Route.Name}, {Text: rs.URL, Show: term.Link(rs.URL, rs.URL)}, {Text: state}})
+	}
+	if width > 0 {
+		nameW, urlW := 0, 0
+		for _, r := range rows {
+			nameW, urlW = max(nameW, len([]rune(r[0].Text))), max(urlW, len([]rune(r[1].Text)))
+		}
+		for _, r := range rows {
+			r[2].Text = fit(r[2].Text, width-nameW-urlW-4)
+		}
 	}
 	tui.Table(w, rows)
 }
@@ -179,7 +190,7 @@ func watchWith(ctx context.Context, ticks <-chan time.Time, check func(context.C
 		if term.TTY() {
 			var b strings.Builder
 			fmt.Fprintf(&b, "berthlight status, %s (Ctrl-C to stop)\n\n", now().Format("15:04:05"))
-			writeReport(&b, term, c, rep)
+			writeReport(&b, term, c, rep, term.Width()-1)
 			// Redraw in place, as one synchronized update.
 			out := "\x1b[?2026h"
 			if lines > 0 {
@@ -214,6 +225,19 @@ func watchWith(ctx context.Context, ticks <-chan time.Time, check func(context.C
 		case <-ticks:
 		}
 	}
+}
+
+// fit cuts s to n characters, ending in an ellipsis when cut. n <= 0
+// means no limit.
+func fit(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 || len(r) <= n {
+		return s
+	}
+	if n == 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // summary is the tab title for a report.

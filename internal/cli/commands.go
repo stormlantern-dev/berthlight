@@ -254,7 +254,7 @@ func up(c Config, run rt.Runtime, boat *tui.Progress) error {
 		exists = false
 	}
 	if !exists {
-		if err := os.MkdirAll(c.StateDir, 0o755); err != nil {
+		if err := route.MakeDir(c.StateDir); err != nil {
 			return err
 		}
 		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases}

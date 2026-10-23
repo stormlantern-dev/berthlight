@@ -397,3 +397,31 @@ func TestNoHeaderFlag(t *testing.T) {
 		t.Error("stripFlag found a flag that is not there")
 	}
 }
+
+// TestReportFits: with a width, --watch cuts every line to fit, so a long
+// message never wraps and throws the redraw off.
+func TestReportFits(t *testing.T) {
+	c := Config{Port: 7480, ProxyName: "berthlight", Bases: []string{"localhost"}}
+	rep := status.Report{Routes: []status.RouteStatus{
+		{Route: route.Route{Name: "api-rate-limits", Target: "x", Port: 8080}, URL: "http://api-rate-limits.localhost:7480",
+			Detail: `no container answers to "api-rate-limits" on network bl-api-rate-limits; is the devcontainer running, with --network bl-api-rate-limits --network-alias api-rate-limits?`},
+	}}
+	var b strings.Builder
+	writeReport(&b, tui.Term{}, c, rep, 80)
+	for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n") {
+		if n := len([]rune(l)); n > 80 {
+			t.Errorf("line of %d characters: %q", n, l)
+		}
+	}
+	if !strings.Contains(b.String(), "…") {
+		t.Error("the long message was not cut")
+	}
+	b.Reset()
+	writeReport(&b, tui.Term{}, c, rep, 0)
+	if strings.Contains(b.String(), "…") {
+		t.Error("cut without a width")
+	}
+	if fit("abc", 2) != "a…" || fit("abc", 3) != "abc" || fit("abc", 0) != "abc" {
+		t.Error("fit")
+	}
+}
