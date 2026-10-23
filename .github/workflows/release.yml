@@ -3,7 +3,11 @@
 # proxy image, with signed checksums and build provenance. Then installs the
 # release the way users do and runs it.
 #
-# Secrets: TAP_GITHUB_TOKEN and AUR_KEY (see .goreleaser.yaml).
+# No stored secrets. The tap and bucket token comes from the release GitHub
+# App, whose key is in Cloud KMS, and the AUR key from Secret Manager, both
+# reached through Workload Identity Federation (.github/actions). Repository
+# variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER, TAP_KMS_KEY_VERSION and
+# AUR_KEY_SECRET_VERSION.
 name: Release
 
 on:
@@ -26,7 +30,7 @@ jobs:
     permissions:
       contents: write # the GitHub release
       packages: write # the proxy image on ghcr.io
-      id-token: write # keyless cosign signatures and attestations
+      id-token: write # keyless signatures, attestations, and WIF for the App key and AUR key
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,14 +48,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Mint a token for the tap and the bucket
+        id: app_token
+        uses: ./.github/actions/app-token
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
+          kms-key-version: ${{ vars.TAP_KMS_KEY_VERSION }}
+      - name: Fetch the AUR key
+        id: aur
+        uses: ./.github/actions/aur-key
+        with:
+          workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
+          secret-version: ${{ vars.AUR_KEY_SECRET_VERSION }}
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
+          TAP_GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
+          AUR_KEY: ${{ steps.aur.outputs.path }}
+      # Revoke rather than wait an hour for it to expire; delete the key file.
+      - name: Revoke the token, remove the AUR key
+        if: always()
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" https://api.github.com/installation/token || true
+          fi
+          rm -f "${RUNNER_TEMP}/aur-key"
 
       # Attestations on private repositories need GitHub Enterprise Cloud.
       - name: Build provenance for the release files
