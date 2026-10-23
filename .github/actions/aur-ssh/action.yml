@@ -1,0 +1,97 @@
+name: SSH agent with the AUR key
+description: >
+  Start an ssh-agent holding the AUR key, which lives in Cloud KMS and never
+  leaves it: ssh signs through Google's PKCS#11 library (kmsp11), with
+  permission obtained through Workload Identity Federation.
+
+# The AUR only accepts pushes over SSH. The key is an ECDSA P-256 key
+# generated in Cloud KMS (scripts/gcp-release.nu): there is no private key
+# file anywhere, so nothing to leak and no rotation for exposure. The WIF
+# provider admits only release.yml on a v* tag or
+# verify-release-credentials.yml on main, and grants list, public key and
+# sign on that one key ring.
+#
+# ssh(1) loads PKCS#11 keys with -I but, as of OpenSSH 10, offers them
+# reliably only through an agent, so this starts one: restricted to this
+# kmsp11 (-P), on a socket in RUNNER_TEMP. GoReleaser runs git with only
+# GIT_SSH_COMMAND in the environment, so callers point ssh at the socket
+# with -o IdentityAgent rather than SSH_AUTH_SOCK. Callers kill the agent
+# (SSH_AGENT_PID) and remove gha-creds-*.json at the end of the job.
+#
+# The calling job needs `permissions: id-token: write`.
+
+inputs:
+  workload-identity-provider:
+    description: Full WIF provider name (repository variable TAP_WIF_PROVIDER).
+    required: true
+  key-ring:
+    description: Full KMS key ring name holding only the AUR key (repository variable AUR_KMS_KEY_RING).
+    required: true
+
+outputs:
+  agent:
+    description: Path of the ssh-agent socket.
+    value: ${{ steps.agent.outputs.agent }}
+  pid:
+    description: Process id of the ssh-agent.
+    value: ${{ steps.agent.outputs.pid }}
+
+runs:
+  using: composite
+  steps:
+    # kmsp11 reads Application Default Credentials, so this one needs the
+    # credentials file. It is written to the workspace as gha-creds-*.json,
+    # which .gitignore covers, so GoReleaser still sees a clean tree.
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        create_credentials_file: true
+
+    - name: Load the KMS key into an ssh-agent
+      id: agent
+      shell: bash
+      env:
+        KEY_RING: ${{ inputs.key-ring }}
+        # kmsp11 1.9 (2025-12-09). Checked twice: the archive's checksum,
+        # and Google's release signature over the library.
+        KMSP11_URL: https://github.com/GoogleCloudPlatform/kms-integrations/releases/download/pkcs11-v1.9/libkmsp11-1.9-linux-amd64.tar.gz
+        KMSP11_SHA256: 5397f965073cd5d1e2c43e5148f102f31a7c835902f97eb41c7c9c0f1b876a40
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/kmsp11"
+        mkdir -p "$dir"
+        chmod 700 "$dir"
+        curl -fsSL --retry 3 -o "$dir/kmsp11.tar.gz" "$KMSP11_URL"
+        echo "${KMSP11_SHA256}  $dir/kmsp11.tar.gz" | sha256sum -c -
+        tar -xzf "$dir/kmsp11.tar.gz" -C "$dir" --strip-components 1
+        # The release signing key from kmsp11's user guide.
+        cat > "$dir/release-signing-key.pem" <<'EOF'
+        -----BEGIN PUBLIC KEY-----
+        MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEtfLbXkHUVc9oUPTNyaEK3hIwmuGRoTtd
+        6zDhwqjJuYaMwNd1aaFQLMawTwZgR0Xn27ymVWtqJHBe0FU9BPIQ+SFmKw+9jSwu
+        /FuqbJnLmTnWMJ1jRCtyHNZawvv2wbiB
+        -----END PUBLIC KEY-----
+        EOF
+        sed -i 's/^ *//' "$dir/release-signing-key.pem"
+        openssl dgst -sha384 -verify "$dir/release-signing-key.pem" \
+          -signature "$dir/libkmsp11.so.sig" "$dir/libkmsp11.so"
+
+        # One token, this key ring only. The key's protection level is
+        # SOFTWARE (still non-exportable), which kmsp11 ignores unless told.
+        umask 077
+        printf 'tokens:\n  - key_ring: "%s"\nallow_software_keys: true\n' "$KEY_RING" > "$dir/kmsp11.yaml"
+        export KMS_PKCS11_CONFIG="$dir/kmsp11.yaml"
+
+        # The agent's PKCS#11 helper inherits KMS_PKCS11_CONFIG and
+        # GOOGLE_APPLICATION_CREDENTIALS from here. kmsp11 has no PIN; the
+        # askpass answers ssh-add's prompt with an empty one.
+        sock="${RUNNER_TEMP}/aur-agent.sock"
+        eval "$(ssh-agent -s -P "${dir}/libkmsp11.so" -a "$sock")" > /dev/null
+        printf '#!/bin/sh\necho\n' > "$dir/askpass"
+        chmod 700 "$dir/askpass"
+        SSH_ASKPASS="$dir/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=none \
+          ssh-add -s "$dir/libkmsp11.so" < /dev/null
+        SSH_AUTH_SOCK="$sock" ssh-add -l
+        echo "agent=${sock}" >> "$GITHUB_OUTPUT"
+        echo "pid=${SSH_AGENT_PID}" >> "$GITHUB_OUTPUT"

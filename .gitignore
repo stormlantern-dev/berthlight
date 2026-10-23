@@ -1,3 +1,5 @@
 /berthlight
 /dist/
 /bin/
+# Credentials file of google-github-actions/auth in CI (.github/actions/aur-ssh)
+gha-creds-*.json

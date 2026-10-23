@@ -5,7 +5,8 @@
 # .github/actions):
 #   TAP_GITHUB_TOKEN  a one-hour release App token with contents: write on
 #                     stormlantern-dev/homebrew-tap and scoop-bucket
-#   AUR_KEY           path of the AUR account's SSH key, read from Secret Manager
+#   AUR_SSH_AGENT     socket of an ssh-agent holding the AUR key, which lives
+#                     in Cloud KMS (.github/actions/aur-ssh)
 version: 2
 
 project_name: berthlight
@@ -117,7 +118,12 @@ aurs:
       - "git: route names from worktrees"
       - "podman: container runtime"
       - "docker: container runtime"
-    private_key: "{{ .Env.AUR_KEY }}"
+    # The key is in Cloud KMS and reached through an ssh-agent; there is no
+    # key file. GoReleaser skips the AUR when private_key is empty and runs
+    # git with only GIT_SSH_COMMAND set, so the agent is named in the
+    # command and private_key just has to be non-empty.
+    private_key: "{{ .Env.AUR_SSH_AGENT }}"
+    git_ssh_command: 'ssh -o IdentityAgent="{{ .Env.AUR_SSH_AGENT }}" -o IdentityFile=none -o StrictHostKeyChecking=accept-new -F /dev/null'
     git_url: ssh://aur@aur.archlinux.org/berthlight-bin.git
     commit_author:
       name: berthlight release
