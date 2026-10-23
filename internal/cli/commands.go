@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/proxy"
 	"stormlantern.nl/berthlight/internal/route"
@@ -321,7 +322,7 @@ func cmdDown(args []string, stdout, stderr io.Writer) error {
 
 func cmdURL(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("url", stderr)
-	project := fs.String("project", "", "project name (default: the main worktree's directory name)")
+	project := fs.String("project", "", "project name (default: the one in the worktree's devcontainer.json, else the main worktree's directory name)")
 	base := fs.String("base", "", "base domain (default: the first of $BERTHLIGHT_BASE, or localhost)")
 	port := fs.Int("port", 0, "proxy port (default: $BERTHLIGHT_PORT, or 7480)")
 	dir := fs.String("C", ".", "directory inside the worktree")
@@ -338,6 +339,9 @@ func cmdURL(args []string, stdout, stderr io.Writer) error {
 	}
 	if *port != 0 {
 		c.Port = *port
+	}
+	if *project == "" {
+		*project = wiredProject(*dir)
 	}
 	label, err := naming.LabelFor(*dir, *project)
 	if err != nil {
@@ -418,3 +422,23 @@ type multiFlag []string
 
 func (m *multiFlag) String() string     { return fmt.Sprint([]string(*m)) }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// wiredProject is the project name the worktree's devcontainer.json gives
+// berthlight, if `berthlight devcontainer` wired it, so url names the same
+// route the devcontainer gets; "" otherwise.
+func wiredProject(dir string) string {
+	wt, err := naming.FindWorktree(dir)
+	if err != nil {
+		return ""
+	}
+	path, err := findDevcontainer(wt.Dir)
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	p, _ := devcontainer.Project(b)
+	return p
+}
