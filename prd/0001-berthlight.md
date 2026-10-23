@@ -47,6 +47,9 @@ it is the same every time, and it can be written into instructions.
 - **G5.** Installable with the platform's usual package manager, and verifiable.
 - **G6.** A coding agent can add a project to berthlight by following one skill,
   in whichever agent the author uses.
+- **G7.** A pleasure to use in a modern terminal, from the first run: links
+  that open, progress that shows, a notice when a dev server comes up. Never
+  in the way of scripts and agents, which get plain text.
 
 ## Non-goals
 
@@ -277,6 +280,37 @@ once the CLI is stable.
 
 *Fit:* the workflows exist and pass on main.
 
+**R12 (SHOULD). Terminal experience.** On an interactive terminal, berthlight
+uses what modern terminals (Ghostty, Kitty, WezTerm, iTerm2, Windows Terminal,
+VTE-based ones) understand, and falls back to plain text everywhere else:
+- **Links.** Every URL it prints is a hyperlink (OSC 8).
+- **Copy.** `berthlight url --copy` puts the URL on the clipboard through the
+  terminal (OSC 52), which also works over SSH and inside a container.
+- **Progress.** While the proxy or a route comes up, a sailboat crosses the
+  water to its berth and moors when the dev server answers, in Unicode
+  characters, with an ASCII boat where emoji do not render (the Linux
+  console). Each frame is one synchronized update (mode 2026), so terminals
+  that support it never show half a frame. Operations that finish within
+  150 ms draw nothing.
+- **Watch.** `berthlight status --watch` keeps the status (R6) on screen and
+  current: a progress indicator in the tab or taskbar while a route starts
+  (OSC 9;4), the tab title as a summary ("berthlight · 3/3 ok"), and a
+  desktop notification when a route comes up or goes down (OSC 9 and 777;
+  OSC 99 in Kitty).
+- **Graphics (MAY).** Where the Kitty graphics protocol is available (Kitty,
+  Ghostty), a pixel-art boat in place of the Unicode one.
+- **Plain without a terminal.** Animations and escape sequences go to
+  standard error, and only when it is a terminal; standard output is the same
+  with or without one. No animation with `TERM=dumb`, in CI, or with
+  `BERTHLIGHT_NO_ANIMATION`; no colour with `NO_COLOR`. `--json` on `ls` and
+  `status` gives agents and scripts a stable format.
+
+*Fit:* golden tests of the rendered frames (width stays constant while the
+boat moves, berthed and failed states); a test that piped output has no
+escape sequences; a test per escape sequence (OSC 8, 52, 9;4, 9, 777, 99)
+against its specification; a manual check in Ghostty and Kitty, recorded on
+the tracking issue.
+
 ## Security
 
 - **Exposure.** Only the proxy listens on the host, and only on loopback. Dev
@@ -298,8 +332,9 @@ once the CLI is stable.
 
 1. **MVP:** R1–R6, R8, R9 and R11. HTTP on `*.localhost`. Adopted by both first
    consumers.
-2. **HTTPS:** R7.
-3. **winget:** R10.
+2. **Terminal experience:** R12. The boat already shows on `up` and `add`.
+3. **HTTPS:** R7.
+4. **winget:** R10.
 
 ## Decisions
 
