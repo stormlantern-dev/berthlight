@@ -12,7 +12,8 @@ import (
 // drop in and bounce. Below, at the waterline, a little sailing boat
 // passes; a small octopus surfaces and swipes a tentacle at it, misses
 // just behind the stern with a splash, and sinks back until only its eyes
-// show; the boat moors at a pier whose lamp then comes on. Original pixel
+// show; the boat moors at a quay with Amsterdam canal houses, whose dark
+// windows then light up one by one. Original pixel
 // art, drawn at the C64's chunky resolution.
 
 // Scene size in pixels. On a terminal each pixel is a half cell (two per
@@ -57,6 +58,46 @@ var (
 		"nooooooooo",
 		".oooooooo.",
 	}
+	// Three Amsterdam canal houses of different heights on the quay: a step
+	// gable in red brick, a tall bell gable in grey, a lower neck gable,
+	// each with white trim. 'L' is a window, 'n' a door.
+	houses = [][]string{
+		{
+			"..w..",
+			".wrw.",
+			"wrrrw",
+			"rLrLr",
+			"rrrrr",
+			"rLrLr",
+			"rrrrr",
+			"rLrLr",
+			"rrrrr",
+			"rLnLr",
+		},
+		{
+			".www.",
+			"weeew",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLeLe",
+			"eeeee",
+			"eLnLe",
+		},
+		{
+			"..w..",
+			".wow.",
+			"wooow",
+			"oLoLo",
+			"ooooo",
+			"oLoLo",
+			"ooooo",
+			"oLnLo",
+		},
+	}
 	// A small octopus's head; its tentacles are drawn apart, so they move.
 	octopusHead = []string{
 		"..mmm..",
@@ -87,10 +128,10 @@ const (
 	waterY = 14 // the waterline
 	// The boat's top row: its hull's lower row lies on the waterline.
 	boatY    = waterY - 5
-	dockedX  = 59 // boat's left column when moored
-	pierX    = 70 // the pier's left end
-	lampX    = 77 // the lamp post
-	octopusX = 30 // octopus head's left column
+	dockedX  = 51 // boat's left column when moored
+	jettyX   = 61 // the jetty's left end, reaching out from the shore
+	shoreX   = 65 // land from here to the right edge
+	octopusX = 20 // octopus head's left column
 
 	arriveAt = 3.2 // moored
 )
@@ -137,31 +178,10 @@ func Frame(t time.Duration) *image.RGBA {
 			}
 		}
 	}
-	for i, st := range [][2]int{{8, 10}, {19, 12}, {44, 10}, {53, 12}, {66, 11}} {
+	for i, st := range [][2]int{{8, 10}, {19, 12}, {37, 11}, {44, 10}, {53, 12}} {
 		if int(s*3+float64(i))%4 != 0 { // twinkling
 			set(st[0], st[1], c64['i'])
 		}
-	}
-
-	// The pier: a deck just above the water on posts, and a lamp that
-	// comes on when the boat has moored.
-	for x := pierX; x < SceneW; x++ {
-		set(x, waterY-1, c64['o'])
-	}
-	for y := waterY; y < SceneH; y++ {
-		set(pierX+1, y, c64['n'])
-		set(SceneW-2, y, c64['n'])
-	}
-	for y := waterY - 6; y < waterY-1; y++ {
-		set(lampX, y, c64['e'])
-	}
-	if s >= arriveAt {
-		set(lampX, waterY-7, c64['w'])
-		for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {-2, 0}, {2, 0}} {
-			set(lampX+d[0], waterY-7+d[1], c64['y'])
-		}
-	} else {
-		set(lampX, waterY-7, c64['d'])
 	}
 
 	// The octopus, of which only what is above the waterline shows: under
@@ -171,23 +191,29 @@ func Frame(t time.Duration) *image.RGBA {
 			set(x, y, c)
 		}
 	}, s)
-	for x := 0; x < SceneW; x++ {
+	for x := 0; x < shoreX; x++ {
 		c := c64['u']
 		if (x+int(s*8))%6 < 2 {
 			c = c64['c']
 		}
 		set(x, waterY, c)
 	}
+	drawShore(set, s)
 	drawSplashes(set, s)
 
 	// The boat, sailing in level on the water and mooring.
 	bx, by := boatPos(s)
 	drawSprite(set, boat, bx, by)
 
-	// The word, its letters dropping in one after another and bouncing.
+	// The word, its letters dropping in one after another and bouncing;
+	// when the lights come on, the e works loose and sags.
 	colours := []byte{'w', 'y', 'l', 'c', 'w', 'y', 'l', 'c', 'w', 'y'}
 	for i, r := range word {
 		y := wordY + letterOffset(s, i)
+		sag, tilt := 0, 0
+		if i == looseLetter {
+			sag, tilt = letterSag(s)
+		}
 		c := c64[colours[(i+int(s*6))%len(colours)]]
 		if s >= SceneLength.Seconds() {
 			c = c64[colours[i%len(colours)]]
@@ -199,14 +225,91 @@ func Frame(t time.Duration) *image.RGBA {
 		}{{1, 1, c64['k']}, {0, 0, c}} {
 			for gy, row := range font[r] {
 				for gx, ch := range row {
-					if ch == 'x' && y+gy+layer.dy < skyY {
-						set(wordX+i*6+gx+layer.dx, y+gy+layer.dy, layer.c)
+					if ch == 'x' {
+						dy := sag
+						if gx >= 3 {
+							dy += tilt // the right side hangs lower
+						}
+						set(wordX+i*6+gx+layer.dx, y+gy+dy+layer.dy, layer.c)
 					}
 				}
 			}
 		}
 	}
 	return img
+}
+
+// drawShore draws the quay on the right with its jetty and the canal
+// houses, whose windows light up one after another once the boat has
+// moored.
+func drawShore(set func(int, int, color.RGBA), s float64) {
+	// The quay: a stone edge over a brick wall down into the water.
+	for x := shoreX; x < SceneW; x++ {
+		set(x, waterY-1, c64['i'])
+		for y := waterY; y < SceneH; y++ {
+			c := c64['r']
+			if (x+y)%3 == 0 {
+				c = c64['n']
+			}
+			set(x, y, c)
+		}
+	}
+	for x := jettyX; x < shoreX; x++ {
+		set(x, waterY-1, c64['o'])
+	}
+	for y := waterY; y < SceneH; y++ {
+		set(jettyX+1, y, c64['n'])
+	}
+	for k, house := range houses {
+		x, y := houseAt(k)
+		for sy, row := range house {
+			for sx := 0; sx < len(row); sx++ {
+				switch row[sx] {
+				case '.':
+				case 'L':
+					c := c64['d']
+					if s >= windowLightAt(k, sx, sy) {
+						c = c64['y']
+					}
+					set(x+sx, y+sy, c)
+				default:
+					set(x+sx, y+sy, c64[row[sx]])
+				}
+			}
+		}
+	}
+}
+
+// houseAt is where house k's top left is: side by side on the quay.
+func houseAt(k int) (int, int) {
+	return shoreX + k*5, waterY - 1 - len(houses[k])
+}
+
+// windowLightAt is when the window at (sx, sy) of house k is lit: it is
+// evening, so some are lit from the start; the others light up one by
+// one, in reading order, once the boat has moored.
+func windowLightAt(k, sx, sy int) float64 {
+	n := 0 // windows not lit from the start, before this one
+	for hk, house := range houses {
+		for y, row := range house {
+			for x := 0; x < len(row); x++ {
+				if row[x] != 'L' {
+					continue
+				}
+				litEarly := (hk*3+y+x)%3 == 0
+				if hk == k && y == sy && x == sx {
+					if litEarly {
+						return 0
+					}
+					return arriveAt + 0.035*float64(n)
+				}
+				if !litEarly {
+					n++
+				}
+			}
+		}
+	}
+	return math.Inf(1)
 }
 
 func drawSprite(set func(int, int, color.RGBA), sprite []string, x, y int) {
@@ -342,6 +445,34 @@ func drawSplashes(set func(int, int, color.RGBA), s float64) {
 	splash(float64(octopusX)+3, s-(riseFrom+riseTo)/2)
 	tx, _, _ := tentacleTip(swipeTo)
 	splash(tx, s-swipeTo)
+}
+
+// looseLetter is the letter that works loose when the lights come on: the
+// e of berthlight.
+const looseLetter = 1
+
+// sagFrom is when the e starts to wobble: just after the first lights.
+const sagFrom = arriveAt + 0.25
+
+// letterSag is how far the loose letter has sagged at time s, and how much
+// lower its right side hangs: a wobble, a drop of two pixels with a small
+// bounce, and then it stays, crooked.
+func letterSag(s float64) (sag, tilt int) {
+	t := s - sagFrom
+	switch {
+	case t < 0:
+		return 0, 0
+	case t < 0.15: // wobble
+		if int(t*40)%2 == 0 {
+			return 0, 1
+		}
+		return 0, -1
+	case t < 0.25: // drop
+		return 1, 1
+	case t < 0.32:
+		return 3, 1 // a pixel too far
+	}
+	return 2, 1 // and back up, hanging crooked
 }
 
 // letterOffset is how far above its resting row letter i is at time s: it

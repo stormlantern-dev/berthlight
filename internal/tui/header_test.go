@@ -15,6 +15,18 @@ import (
 )
 
 func TestSceneEndsAtRest(t *testing.T) {
+	if word[looseLetter] != 'e' {
+		t.Error("the loose letter is not the e")
+	}
+	if sag, tilt := letterSag(sagFrom - 0.01); sag != 0 || tilt != 0 {
+		t.Error("the e sags before the lights come on")
+	}
+	if sag, tilt := letterSag(SceneLength.Seconds()); sag != 2 || tilt != 1 {
+		t.Errorf("at the end the e hangs %d down, tilted %d; want 2 down and crooked", sag, tilt)
+	}
+	if sagFrom < arriveAt || sagFrom+0.32 > SceneLength.Seconds() {
+		t.Error("the e does not sag between the lights coming on and the end")
+	}
 	for i := range word {
 		if off := letterOffset(SceneLength.Seconds(), i); off != 0 {
 			t.Errorf("letter %d still %d px off at the end", i, off)
@@ -33,11 +45,37 @@ func TestSceneEndsAtRest(t *testing.T) {
 		t.Error("the tentacle is out at the end")
 	}
 	last := Frame(SceneLength)
-	if last.RGBAAt(lampX, waterY-7) != c64['w'] {
-		t.Error("the lamp is not lit at the end")
+	dark, lit := 0, 0
+	for k, house := range houses {
+		x, y := houseAt(k)
+		for sy, row := range house {
+			for wx := range len(row) {
+				if row[wx] != 'L' {
+					continue
+				}
+				if last.RGBAAt(x+wx, y+sy) != c64['y'] {
+					t.Errorf("house %d's window (%d, %d) is dark at the end", k, wx, sy)
+				}
+				if Frame(0).RGBAAt(x+wx, y+sy) == c64['y'] {
+					lit++
+				} else {
+					dark++
+				}
+			}
+		}
+		if x+len(house[0]) > SceneW || y < 0 {
+			t.Errorf("house %d does not fit", k)
+		}
 	}
-	if Frame(0).RGBAAt(lampX, waterY-7) == c64['w'] {
-		t.Error("the lamp is lit at the start")
+	if lit == 0 || dark == 0 {
+		t.Errorf("at the start %d windows are lit and %d dark; want some of each", lit, dark)
+	}
+	heights := map[int]bool{}
+	for _, h := range houses {
+		heights[len(h)] = true
+	}
+	if len(heights) != len(houses) {
+		t.Error("the houses are not of different heights")
 	}
 	// After SceneLength the frame does not change, so a stopped header
 	// and a static one look the same.
@@ -106,7 +144,7 @@ func TestKittyImage(t *testing.T) {
 	if len(raw) != w*h*4 {
 		t.Fatalf("%d bytes of pixels, want %d", len(raw), w*h*4)
 	}
-	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 7}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
+	for _, p := range [][2]int{{0, 0}, {shoreX + 2, waterY - 3}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
 		c := img.RGBAAt(p[0], p[1])
 		i := ((p[1]*kittyScale+3)*w + p[0]*kittyScale + 3) * 4
 		if raw[i] != c.R || raw[i+1] != c.G || raw[i+2] != c.B || raw[i+3] != 0xff {
@@ -217,7 +255,7 @@ func TestStory(t *testing.T) {
 		t.Errorf("at the end the octopus's top is row %d; only its eyes (row 2) should be above the waterline %d", top, waterY)
 	}
 	bx, by := boatPos(end)
-	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > pierX {
+	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > jettyX {
 		t.Errorf("the boat ends at (%d, %d), not moored on the waterline before the pier", bx, by)
 	}
 }
