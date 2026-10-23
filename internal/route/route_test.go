@@ -161,3 +161,26 @@ func TestNetwork(t *testing.T) {
 		t.Errorf("default network written: %s", b)
 	}
 }
+
+// TestMakeDirReadable: the proxy reads the state directory as another
+// user, so it is made readable even when it existed as 0700 or the umask
+// is strict.
+func TestMakeDirReadable(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("no Unix permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(dir, &Table{}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o055 != 0o055 {
+		t.Errorf("state directory mode %v; the proxy cannot read it", info.Mode().Perm())
+	}
+}

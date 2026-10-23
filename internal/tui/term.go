@@ -55,6 +55,7 @@ type Term struct {
 	tty  bool
 	kind Kind
 	term string
+	f    *os.File
 }
 
 // NewTerm returns a Term for w if it is an interactive terminal.
@@ -63,7 +64,19 @@ func NewTerm(w io.Writer) Term {
 	if !ok || !isTerminal(f) {
 		return Term{w: w}
 	}
-	return Term{w: w, tty: true, kind: DetectKind(os.Getenv), term: os.Getenv("TERM")}
+	return Term{w: w, tty: true, kind: DetectKind(os.Getenv), term: os.Getenv("TERM"), f: f}
+}
+
+// Width is the terminal's width in columns, or 0 when unknown.
+func (t Term) Width() int {
+	if t.f == nil {
+		return 0
+	}
+	w, _, err := xterm.GetSize(int(t.f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return w
 }
 
 // TTY reports whether the Term writes to an interactive terminal.

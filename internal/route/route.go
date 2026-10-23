@@ -192,11 +192,28 @@ func Parse(b []byte) (*Table, error) {
 	return &t, nil
 }
 
+// MakeDir creates the state directory, and makes it readable and
+// searchable by everyone even if it existed, or the umask was strict: the
+// proxy reads it as another user. Routes are not secret.
+func MakeDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o055 != 0o055 {
+		return os.Chmod(dir, info.Mode().Perm()|0o755)
+	}
+	return nil
+}
+
 // Save writes the table to dir atomically. The directory and file are
 // readable by everyone: the proxy runs as an unprivileged user that, under
 // rootless Podman, is not the file's owner. Routes are not secret.
 func Save(dir string, t *Table) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := MakeDir(dir); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(t, "", "  ")
