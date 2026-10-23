@@ -14,7 +14,7 @@ Codex, OpenCode and pi.
 
 ![Twelve dev servers coming up in berthlight status --watch, each at its own name](docs/brag.gif)
 
-*Twelve dev servers in their own devcontainers, each at its own name, coming up one by one in `berthlight status --watch` in Ghostty. Recorded from real containers with [tools/guides](tools/guides).*
+*Twelve dev servers in their own devcontainers, each at its own name, coming up one by one in `berthlight status --watch` in Ghostty. Recorded from real containers with [tools/guides](tools/guides). Run `berthlight` on its own for the rest of the show.*
 
 **Status:** early development. See [the PRD](prd/0001-berthlight.md) and #1.
 
