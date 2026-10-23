@@ -35,6 +35,12 @@ jobs:
       - run: go run ./cmd/berthlight url
       # R8, R11: the skill installs on every platform, and the installed
       # copy passes the Agent Skills reference validator.
+      - name: The README tools build and pass their tests
+        if: runner.os == 'Linux'
+        working-directory: tools/guides
+        run: |
+          go vet ./...
+          go test ./...
       - name: Install the agent skill
         shell: bash
         run: go run ./cmd/berthlight skill install --agent all --project -C "$RUNNER_TEMP/project"
