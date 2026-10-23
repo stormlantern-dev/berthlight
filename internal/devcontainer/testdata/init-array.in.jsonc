@@ -1,0 +1,5 @@
+{
+    "image": "node:22",
+    "initializeCommand": ["sh", "-c", "touch .env"],
+    "appPort": "8080"
+}

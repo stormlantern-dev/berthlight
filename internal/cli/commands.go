@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"syscall"
 	"text/tabwriter"
@@ -27,21 +28,38 @@ func urlFor(c Config, name string) string {
 func cmdAdd(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("add", stderr)
 	target := fs.String("target", "", "container network alias (default: the name)")
+	network := fs.String("network", "", "the route's container network, starting with bl- (default: bl-<name>)")
+	project := fs.String("project", "", "project name, when the name comes from the worktree (default: the main worktree's directory name)")
+	dir := fs.String("C", ".", "directory inside the worktree, when the name comes from the worktree")
+	replace := fs.Bool("replace", false, "take over a name another route holds")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return errUsage
 	}
-	if len(pos) != 2 {
-		fmt.Fprintln(stderr, "usage: berthlight add <name> <port> [--target alias]")
+	var name, portArg string
+	switch len(pos) {
+	case 1:
+		portArg = pos[0]
+		if name, err = naming.LabelFor(*dir, *project); err != nil {
+			return fmt.Errorf("deriving the name from the worktree: %w", err)
+		}
+	case 2:
+		name, portArg = pos[0], pos[1]
+	default:
+		fmt.Fprintln(stderr, "usage: berthlight add [<name>] <port> [--target alias] [--network bl-…] [--replace]")
+		fmt.Fprintln(stderr, "       without <name>, the name is the current worktree's (see berthlight url)")
 		return errUsage
 	}
-	port, err := strconv.Atoi(pos[1])
+	port, err := strconv.Atoi(portArg)
 	if err != nil {
-		return fmt.Errorf("port %q is not a number", pos[1])
+		return fmt.Errorf("port %q is not a number", portArg)
 	}
-	r := route.Route{Name: pos[0], Target: pos[0], Port: port}
+	r := route.Route{Name: name, Target: name, Port: port, NetworkName: *network}
 	if *target != "" {
 		r.Target = *target
+	}
+	if r.NetworkName == route.NetworkName(r.Name) {
+		r.NetworkName = ""
 	}
 	if err := r.Validate(); err != nil {
 		return err
@@ -50,9 +68,25 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	tab, err := route.Load(c.StateDir)
+	if err != nil {
+		return err
+	}
+	if err := tab.Conflict(r); err != nil {
+		return err
+	}
+	old, exists := tab.Lookup(r.Name)
+	if exists && !old.SameOwner(r) && !*replace {
+		return fmt.Errorf("route %q already goes to %s on network %s; to take the name over, add --replace", r.Name, old.Addr(), old.Network())
+	}
 	run, err := rt.Detect()
 	if err != nil {
 		return err
+	}
+	if exists && old.Network() != r.Network() {
+		if err := removeRoute(c, run, tab, old, stderr); err != nil {
+			return err
+		}
 	}
 	boat := tui.Start(stderr, "starting the proxy")
 	if err := up(c, run, boat); err != nil {
@@ -69,10 +103,6 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	boat.Done(r.Name + " berthed")
-	tab, err := route.Load(c.StateDir)
-	if err != nil {
-		return err
-	}
 	tab.Put(r)
 	if err := route.Save(c.StateDir, tab); err != nil {
 		return err
@@ -100,17 +130,29 @@ func cmdRm(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !tab.Remove(name) {
+	r, ok := tab.Lookup(name)
+	if !ok {
 		return fmt.Errorf("no route named %q", name)
-	}
-	if err := route.Save(c.StateDir, tab); err != nil {
-		return err
 	}
 	run, err := rt.Detect()
 	if err != nil {
 		return err
 	}
-	network := route.NetworkName(name)
+	if err := removeRoute(c, run, tab, r, stderr); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "removed %s\n", name)
+	return nil
+}
+
+// removeRoute deletes r from the table, saves it, takes the proxy off the
+// route's network and removes the network if nothing else uses it.
+func removeRoute(c Config, run rt.Runtime, tab *route.Table, r route.Route, stderr io.Writer) error {
+	tab.Remove(r.Name)
+	if err := route.Save(c.StateDir, tab); err != nil {
+		return err
+	}
+	network := r.Network()
 	// Recreate the proxy rather than disconnect it: on rootless Podman, a
 	// disconnect breaks the published port's forwarding. The new proxy
 	// starts on its own network and joins the remaining routes' networks.
@@ -119,15 +161,12 @@ func cmdRm(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		for _, n := range nets {
-			if n == network {
-				if err := run.RemoveContainer(c.ProxyName); err != nil {
-					return err
-				}
-				if err := up(c, run, nil); err != nil {
-					return err
-				}
-				break
+		if slices.Contains(nets, network) {
+			if err := run.RemoveContainer(c.ProxyName); err != nil {
+				return err
+			}
+			if err := up(c, run, nil); err != nil {
+				return err
 			}
 		}
 	}
@@ -136,7 +175,6 @@ func cmdRm(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stderr, "berthlight: kept network %s, still in use by a container\n", network)
 		}
 	}
-	fmt.Fprintf(stdout, "removed %s\n", name)
 	return nil
 }
 

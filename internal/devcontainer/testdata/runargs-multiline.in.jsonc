@@ -1,0 +1,12 @@
+{
+  "image": "node:22",
+  "runArgs": [
+    "--init", // reap zombies
+    "--userns=keep-id"
+  ],
+  "appPort": [
+    8080, // vite
+    "8080/udp",
+    3000
+  ]
+}

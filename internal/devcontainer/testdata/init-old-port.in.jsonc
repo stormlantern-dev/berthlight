@@ -1,0 +1,5 @@
+{
+  "image": "node:22",
+  "runArgs": ["--network=bl-${localWorkspaceFolderBasename}", "--network-alias=shop"],
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "shop", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "3000"]
+}

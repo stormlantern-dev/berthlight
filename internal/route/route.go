@@ -14,8 +14,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"stormlantern.nl/berthlight/internal/naming"
 )
@@ -31,16 +33,42 @@ type Route struct {
 	Target string `json:"target"`
 	// Port is the dev server's port inside the container.
 	Port int `json:"port"`
+	// NetworkName is the route's container network. Empty means
+	// bl-<name>. A devcontainer sets it to bl-<workspace folder name>,
+	// because devcontainer.json can name the folder but cannot derive the
+	// route name from it (see the devcontainer package).
+	NetworkName string `json:"network,omitempty"`
 }
 
 // Addr is the upstream address, target:port.
 func (r Route) Addr() string { return r.Target + ":" + strconv.Itoa(r.Port) }
 
 // Network is the name of the route's own container network.
-func (r Route) Network() string { return NetworkName(r.Name) }
+func (r Route) Network() string {
+	if r.NetworkName != "" {
+		return r.NetworkName
+	}
+	return NetworkName(r.Name)
+}
 
-// NetworkName returns the container network for a route name.
-func NetworkName(name string) string { return "bl-" + name }
+// NetworkPrefix starts the name of every route network, so berthlight only
+// ever connects the proxy to networks it made for routes.
+const NetworkPrefix = "bl-"
+
+// NetworkName returns the default container network for a route name.
+func NetworkName(name string) string { return NetworkPrefix + name }
+
+// validNetwork is what Docker and Podman accept as a network name, with
+// berthlight's prefix.
+var validNetwork = regexp.MustCompile(`^bl-[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// ValidNetwork checks a route network name.
+func ValidNetwork(name string) error {
+	if !validNetwork.MatchString(name) {
+		return fmt.Errorf("network %q is not a valid route network: it must start with %q followed by a letter or digit, then letters, digits, '_', '.' or '-'", name, NetworkPrefix)
+	}
+	return nil
+}
 
 // Validate checks that the route can be served.
 func (r Route) Validate() error {
@@ -53,7 +81,19 @@ func (r Route) Validate() error {
 	if r.Port < 1 || r.Port > 65535 {
 		return fmt.Errorf("route %q: port %d out of range", r.Name, r.Port)
 	}
+	if r.NetworkName != "" {
+		if err := ValidNetwork(r.NetworkName); err != nil {
+			return fmt.Errorf("route %q: %w", r.Name, err)
+		}
+	}
 	return nil
+}
+
+// SameOwner reports whether two routes for one name come from the same
+// place: the same network and target. Only the port may differ, as when a
+// project moves its dev server to another port.
+func (r Route) SameOwner(o Route) bool {
+	return r.Name == o.Name && r.Network() == o.Network() && r.Target == o.Target
 }
 
 // Table is the set of routes, by name.
@@ -86,6 +126,26 @@ func (t *Table) Put(r Route) {
 	sort.Slice(t.Routes, func(i, j int) bool { return t.Routes[i].Name < t.Routes[j].Name })
 }
 
+// Conflict returns an error when another route than r.Name uses r's
+// network or target. Routes never share a network, or they could reach each
+// other. They never share a target either: the proxy is on every route's
+// network and resolves targets through all of them, so two containers with
+// one alias on two networks would answer for each other's name.
+func (t *Table) Conflict(r Route) error {
+	for _, o := range t.Routes {
+		if o.Name == r.Name {
+			continue
+		}
+		if o.Network() == r.Network() {
+			return fmt.Errorf("network %s already belongs to route %q", r.Network(), o.Name)
+		}
+		if strings.EqualFold(o.Target, r.Target) {
+			return fmt.Errorf("target %q is already route %q's; each route needs its own alias, because the proxy resolves aliases on every route network", r.Target, o.Name)
+		}
+	}
+	return nil
+}
+
 // Remove deletes the route with the given name and reports whether it existed.
 func (t *Table) Remove(name string) bool {
 	for i := range t.Routes {
@@ -116,7 +176,7 @@ func Parse(b []byte) (*Table, error) {
 		return nil, fmt.Errorf("%s: %w", FileName, err)
 	}
 	seen := map[string]bool{}
-	for _, r := range t.Routes {
+	for i, r := range t.Routes {
 		if err := r.Validate(); err != nil {
 			return nil, err
 		}
@@ -124,6 +184,10 @@ func Parse(b []byte) (*Table, error) {
 			return nil, fmt.Errorf("%s: route %q appears twice", FileName, r.Name)
 		}
 		seen[r.Name] = true
+		earlier := Table{Routes: t.Routes[:i]}
+		if err := earlier.Conflict(r); err != nil {
+			return nil, fmt.Errorf("%s: route %q: %w", FileName, r.Name, err)
+		}
 	}
 	return &t, nil
 }
