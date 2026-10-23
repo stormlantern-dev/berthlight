@@ -304,8 +304,9 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   notification.
 - **Header.** A small demo scene in the spirit of the C64 and Amiga heads
   each interactive command: copper bars, the letters of the name dropping in
-  and bouncing, a submarine surfacing over an octopus's tentacle and mooring
-  at a berth whose light comes on. Animated where the Kitty graphics protocol
+  and bouncing, and at the waterline a little sailing boat passing a small
+  octopus that surfaces, swipes a tentacle at it and misses, before the boat
+  moors at a pier whose light comes on. Animated where the Kitty graphics protocol
   is available (Kitty, Ghostty) while the command works, at most 4 seconds,
   and on its last frame at the command's first output, so it never holds a
   command up; the last frame in half blocks on other truecolor terminals;

@@ -9,16 +9,17 @@ import (
 
 // The header scene (PRD 0001, R12): a small demo in the spirit of the C64
 // and Amiga. Copper bars roll behind the word berthlight, whose letters
-// drop in and bounce. Below the waterline a submarine cruises over an
-// octopus, swerves away from the tentacle it reaches up with, surfaces and
-// moors alongside a pier whose lamp then comes on. Original pixel art,
-// drawn at the C64's chunky resolution.
+// drop in and bounce. Below, at the waterline, a little sailing boat
+// passes; a small octopus surfaces and swipes a tentacle at it, misses
+// just behind the stern with a splash, and sinks back until only its eyes
+// show; the boat moors at a pier whose lamp then comes on. Original pixel
+// art, drawn at the C64's chunky resolution.
 
 // Scene size in pixels. On a terminal each pixel is a half cell (two per
 // character row), so the header is SceneW columns by SceneH/2 rows.
 const (
 	SceneW = 80
-	SceneH = 24
+	SceneH = 20
 	// SceneLength is how long the scene runs before it rests on its last
 	// frame.
 	SceneLength = 4 * time.Second
@@ -46,24 +47,22 @@ var c64 = map[byte]color.RGBA{
 
 // Sprites: one palette letter per pixel, '.' for transparent.
 var (
-	// The submarine faces right: conning tower and periscope on top,
-	// portholes along the hull, the propeller at the back. Rows 0-1 are the
-	// tower; when it has surfaced, the hull (rows 2-4) lies in the water.
-	submarine = []string{
-		"......o.o....",
-		".....yyyy....",
-		"..yyyyyyyyyy.",
-		"eyycyycyycyyy",
-		"..yyyyyyyyy..",
+	// A small sailing boat, bow to the right: mainsail and jib either side
+	// of the mast, the hull's lower row in the water.
+	boat = []string{
+		".....i....",
+		"....wiw...",
+		"...wwiww..",
+		"..wwwiwww.",
+		"nooooooooo",
+		".oooooooo.",
 	}
-	// The octopus's head (mantle) with its eyes; the tentacles are drawn
-	// apart, so they can move.
+	// A small octopus's head; its tentacles are drawn apart, so they move.
 	octopusHead = []string{
-		"...mmmmm...",
-		"..mmmmmmm..",
-		".mmmmmmmmm.",
-		".mwkmmmwkm.",
-		"..mmmmmmm..",
+		"..mmm..",
+		".mmmmm.",
+		"mwkmwkm",
+		"mmmmmmm",
 	}
 )
 
@@ -81,23 +80,29 @@ var font = map[rune][]string{
 
 // Where things are.
 const (
-	word    = "berthlight"
-	wordX   = 2  // first letter's column
-	wordY   = 1  // resting row of the letters' top
-	waterY  = 9  // the waterline; water below it
-	seabedY = 23 // the seabed
-	cruiseY = 10 // submarine's top row while cruising, at periscope depth
-	// The octopus's head, on the seabed.
-	octopusX = 26
-	octopusY = seabedY - 2 - len(".....") // head, then a row of tentacles
-	pierX    = 71                         // the pier's left end
-	lampX    = 77                         // the lamp post
-	dockedX  = 58                         // submarine's left column when moored
-	// surfacedY puts the hull's top row on the waterline.
-	surfacedY = waterY - 2
+	word   = "berthlight"
+	wordX  = 2  // first letter's column
+	wordY  = 1  // resting row of the letters' top
+	skyY   = 9  // below the word: the night sky over the water
+	waterY = 14 // the waterline
+	// The boat's top row: its hull's lower row lies on the waterline.
+	boatY    = waterY - 5
+	dockedX  = 59 // boat's left column when moored
+	pierX    = 70 // the pier's left end
+	lampX    = 77 // the lamp post
+	octopusX = 30 // octopus head's left column
 
-	surfaceAt = 2.4 // the submarine starts to surface
-	arriveAt  = 3.2 // moored
+	arriveAt = 3.2 // moored
+)
+
+// The octopus's story, in seconds.
+const (
+	riseFrom  = 1.25 // surfaces just behind the boat as it passes
+	riseTo    = 1.55 // head and eyes out of the water
+	swipeFrom = 1.6  // the tentacle swings up and over at the boat
+	swipeTo   = 1.95 // and slaps the water just behind its stern
+	sinkFrom  = 2.3  // sinks back
+	sinkTo    = 2.9  // until only its eyes show
 )
 
 // Frame draws the scene at time t; from SceneLength on it is the last
@@ -111,7 +116,7 @@ func Frame(t time.Duration) *image.RGBA {
 		}
 	}
 
-	// Night sky with copper bars rolling behind the word; the water.
+	// Night sky, copper bars rolling behind the word, and the sea.
 	for y := 0; y < SceneH; y++ {
 		c := c64['k']
 		if y > waterY {
@@ -125,14 +130,47 @@ func Frame(t time.Duration) *image.RGBA {
 	for _, phase := range []float64{0, math.Pi} {
 		top := 2 + int(math.Round(2.5*math.Sin(s*2.2+phase)))
 		for i, p := range bars {
-			if y := top + i - 1; y >= 0 && y < waterY-1 {
+			if y := top + i - 1; y >= 0 && y < skyY-1 {
 				for x := 0; x < SceneW; x++ {
 					set(x, y, c64[p])
 				}
 			}
 		}
 	}
-	// The waterline: small waves rolling to the right.
+	for i, st := range [][2]int{{8, 10}, {19, 12}, {44, 10}, {53, 12}, {66, 11}} {
+		if int(s*3+float64(i))%4 != 0 { // twinkling
+			set(st[0], st[1], c64['i'])
+		}
+	}
+
+	// The pier: a deck just above the water on posts, and a lamp that
+	// comes on when the boat has moored.
+	for x := pierX; x < SceneW; x++ {
+		set(x, waterY-1, c64['o'])
+	}
+	for y := waterY; y < SceneH; y++ {
+		set(pierX+1, y, c64['n'])
+		set(SceneW-2, y, c64['n'])
+	}
+	for y := waterY - 6; y < waterY-1; y++ {
+		set(lampX, y, c64['e'])
+	}
+	if s >= arriveAt {
+		set(lampX, waterY-7, c64['w'])
+		for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {-2, 0}, {2, 0}} {
+			set(lampX+d[0], waterY-7+d[1], c64['y'])
+		}
+	} else {
+		set(lampX, waterY-7, c64['d'])
+	}
+
+	// The octopus, of which only what is above the waterline shows: under
+	// water it is out of sight.
+	drawOctopus(func(x, y int, c color.RGBA) {
+		if y < waterY {
+			set(x, y, c)
+		}
+	}, s)
 	for x := 0; x < SceneW; x++ {
 		c := c64['u']
 		if (x+int(s*8))%6 < 2 {
@@ -140,66 +178,11 @@ func Frame(t time.Duration) *image.RGBA {
 		}
 		set(x, waterY, c)
 	}
-	// Seabed, and weed swaying.
-	for x := 0; x < SceneW; x++ {
-		set(x, seabedY, c64['n'])
-	}
-	for _, wx := range []int{5, 12, 46, 52, 65} {
-		for h := 0; h < 4; h++ {
-			sway := int(math.Round(math.Sin(s*3+float64(wx)) * float64(h) / 3))
-			set(wx+sway, seabedY-1-h, c64['g'])
-		}
-	}
+	drawSplashes(set, s)
 
-	// The pier: a deck above the water on posts down to the seabed, and a
-	// lamp that comes on when the submarine has moored.
-	for y := waterY - 1; y < seabedY; y++ {
-		set(pierX+1, y, c64['n'])
-		set(SceneW-2, y, c64['n'])
-	}
-	for x := pierX; x < SceneW; x++ {
-		set(x, waterY-1, c64['o'])
-	}
-	for y := waterY - 6; y < waterY-1; y++ {
-		set(lampX, y, c64['e'])
-	}
-	if s >= arriveAt {
-		set(lampX, waterY-7, c64['w'])
-		for _, d := range [][2]int{{-1, -7}, {1, -7}, {0, -8}, {-2, -7}, {2, -7}} {
-			set(lampX+d[0], waterY+d[1], c64['y'])
-		}
-	} else {
-		set(lampX, waterY-7, c64['d'])
-	}
-
-	// The octopus: its head on the seabed, six tentacles curling out over
-	// it, and one reaching up at the submarine.
-	drawOctopus(set, s)
-
-	// The submarine, and bubbles from its propeller while it is under.
-	subX, subY := submarinePos(s)
-	for i := 0; i < 4; i++ {
-		age := math.Mod(s*2+float64(i)*0.5, 2)
-		if s >= surfaceAt || age > s {
-			continue
-		}
-		_, y0 := submarinePos(s - age)
-		bx := int(math.Round(subXAt(s-age))) - 1
-		by := y0 + 3 - int(age*4)
-		if by > waterY {
-			set(bx, by, c64['c'])
-		}
-	}
-	drawSprite(set, submarine, int(math.Round(subX)), subY)
-	// Water over whatever lies below the waterline when it has surfaced:
-	// the waterline stays in front of the hull.
-	if subY < waterY {
-		for x := int(math.Round(subX)) + 1; x < int(math.Round(subX))+len(submarine[0])-1; x++ {
-			if (x+int(s*8))%6 < 2 {
-				set(x, waterY, c64['c'])
-			}
-		}
-	}
+	// The boat, sailing in and mooring, bobbing on the waves.
+	bx, by := boatPos(s)
+	drawSprite(set, boat, bx, by)
 
 	// The word, its letters dropping in one after another and bouncing.
 	colours := []byte{'w', 'y', 'l', 'c', 'w', 'y', 'l', 'c', 'w', 'y'}
@@ -216,7 +199,7 @@ func Frame(t time.Duration) *image.RGBA {
 		}{{1, 1, c64['k']}, {0, 0, c}} {
 			for gy, row := range font[r] {
 				for gx, ch := range row {
-					if ch == 'x' && y+gy+layer.dy < waterY {
+					if ch == 'x' && y+gy+layer.dy < skyY {
 						set(wordX+i*6+gx+layer.dx, y+gy+layer.dy, layer.c)
 					}
 				}
@@ -224,25 +207,6 @@ func Frame(t time.Duration) *image.RGBA {
 		}
 	}
 	return img
-}
-
-// drawOutlined draws a sprite with a black outline, as C64 sprites often
-// had, so it stands out from the water.
-func drawOutlined(set func(int, int, color.RGBA), sprite []string, x, y int) {
-	filled := func(sx, sy int) bool {
-		return sy >= 0 && sy < len(sprite) && sx >= 0 && sx < len(sprite[sy]) && sprite[sy][sx] != '.'
-	}
-	for sy := -1; sy <= len(sprite); sy++ {
-		for sx := -1; sx <= len(sprite[0]); sx++ {
-			if filled(sx, sy) {
-				continue
-			}
-			if filled(sx-1, sy) || filled(sx+1, sy) || filled(sx, sy-1) || filled(sx, sy+1) {
-				set(x+sx, y+sy, c64['k'])
-			}
-		}
-	}
-	drawSprite(set, sprite, x, y)
 }
 
 func drawSprite(set func(int, int, color.RGBA), sprite []string, x, y int) {
@@ -255,107 +219,134 @@ func drawSprite(set func(int, int, color.RGBA), sprite []string, x, y int) {
 	}
 }
 
-// drawOctopus draws the head with six tentacles curling out to both sides
-// along the seabed, each waving, and the reaching tentacle.
-func drawOctopus(set func(int, int, color.RGBA), s float64) {
-	hx, hy := octopusX, octopusY
-	w := len(octopusHead[0])
-	bottom := hy + len(octopusHead)
-	// Each tentacle: a list of pixels, drawn over a black shadow so it
-	// stands out from the water like the outlined head.
-	var pixels [][2]int
-	for k := 0; k < 6; k++ {
-		dir, n := -1, k // n counts from the middle out
-		if k >= 3 {
-			dir, n = 1, 5-k
-		}
-		// Down from under the head, out along the seabed, and the tip
-		// curling back up beside the head; outer ones reach further.
-		x := hx + w/2 + dir*(1+n)
-		y := bottom
-		steps := 6 + 2*(2-n)
-		for j := 0; j < steps; j++ {
-			wave := int(math.Round(math.Sin(s*4+float64(k)*1.3+float64(j)*0.7) * 0.5))
-			pixels = append(pixels, [2]int{x, min(y+wave, seabedY-1)})
-			switch {
-			case j < 1:
-				y++
-			case j >= steps-3:
-				y--
-			}
-			x += dir
-		}
-	}
-	// The reaching tentacle rises from the head's right side, curling,
-	// where the submarine just was.
-	reach := tentacleReach(s)
-	for h := 0; h < reach; h++ {
-		wig := int(math.Round(math.Sin(s*7+float64(h)*0.9) * 0.8))
-		pixels = append(pixels, [2]int{hx + w - 3 + wig + h/2, hy - 1 - h})
-		if h == reach-1 {
-			pixels = append(pixels, [2]int{hx + w - 2 + wig + h/2, hy - 1 - h})
-		}
-	}
-	for _, p := range pixels {
-		for _, d := range [][2]int{{0, 1}, {1, 0}, {-1, 0}} {
-			if p[1]+d[1] < seabedY {
-				set(p[0]+d[0], p[1]+d[1], c64['k'])
-			}
-		}
-	}
-	for _, p := range pixels {
-		set(p[0], p[1], c64['m'])
-	}
-	drawOutlined(set, octopusHead, hx, hy)
+// smooth eases u from 0 to 1 (smoothstep), clamped.
+func smooth(u float64) float64 {
+	u = min(max(u, 0), 1)
+	return u * u * (3 - 2*u)
 }
 
-// subXAt is the submarine's left column at time s: in from off-screen,
-// easing into its berth.
-func subXAt(s float64) float64 {
-	from, to := -float64(len(submarine[0])), float64(dockedX)
+// boatXAt is the boat's left column at time s: in from off-screen,
+// slowing down into its berth.
+func boatXAt(s float64) float64 {
+	from, to := -float64(len(boat[0])), float64(dockedX)
 	if s >= arriveAt {
 		return to
 	}
 	u := s / arriveAt
-	u = 1 - (1-u)*(1-u) // ease out: slows down to moor
+	u = 1 - (1-u)*(1-u) // ease out
 	return from + (to-from)*u
 }
 
-// submarinePos adds depth: cruising, a smooth swerve up and away from the
-// reaching tentacle, then surfacing alongside the pier.
-func submarinePos(s float64) (float64, int) {
-	x := subXAt(s)
-	y := float64(cruiseY)
-	// A short lift as the tentacle snaps up just behind it.
-	if r := tentacleReachF(s); r > 0 {
-		y -= r / tentacleMax
+// boatPos is where the boat is drawn: its column, and its top row with a
+// little bob on the waves while it sails.
+func boatPos(s float64) (int, int) {
+	y := boatY
+	if s < arriveAt && math.Sin(s*7) > 0.6 {
+		y-- // lifted by a wave
 	}
-	if s < surfaceAt {
-		y += 0.4 * math.Sin(s*5) // a slight bob
-	} else {
-		u := min((s-surfaceAt)/(arriveAt-surfaceAt), 1)
-		u = u * u * (3 - 2*u) // smoothstep
-		y = float64(cruiseY) + (float64(surfacedY)-float64(cruiseY))*u
-	}
-	return x, int(math.Round(y))
+	return int(math.Round(boatXAt(s))), y
 }
 
-// The reaching tentacle: when, and how far.
-const (
-	reachFrom   = 1.45
-	reachTo     = 2.35
-	tentacleMax = 5
-)
-
-func tentacleReachF(s float64) float64 {
-	if s < reachFrom || s > reachTo {
-		return 0
+// octopusTop is the row of the octopus's head's top at time s: deep under
+// water, surfacing, then sinking back until only its eyes show.
+func octopusTop(s float64) int {
+	deep := float64(waterY + 3)              // fully under water
+	up := float64(waterY - len(octopusHead)) // head out, sitting on the waterline
+	peek := float64(waterY - 3)              // eyes just above the water
+	y := deep + (up-deep)*smooth((s-riseFrom)/(riseTo-riseFrom))
+	if s >= sinkFrom {
+		y = up + (peek-up)*smooth((s-sinkFrom)/(sinkTo-sinkFrom))
 	}
-	return tentacleMax * math.Sin((s-reachFrom)/(reachTo-reachFrom)*math.Pi)
+	return int(math.Round(y))
 }
 
-// tentacleReach is how far up the reaching tentacle is, in pixels.
-func tentacleReach(s float64) int { return int(math.Round(tentacleReachF(s))) }
+// tentacleTip is where the swiping tentacle's tip is, and whether it is
+// out: from the head's right side it swings up, over and down, slapping
+// the water just behind the passing boat's stern.
+func tentacleTip(s float64) (x, y float64, out bool) {
+	if s < swipeFrom || s > sinkFrom {
+		return 0, 0, false
+	}
+	bx, by := tentacleBase(s)
+	u := smooth((s - swipeFrom) / (swipeTo - swipeFrom))
+	// An arc from up and back to down and ahead: wide, not too tall, so it
+	// stays under the word.
+	angle := (-110 + 130*u) * math.Pi / 180
+	return bx + 8*math.Cos(angle), by + 5*math.Sin(angle), true
+}
+
+func tentacleBase(s float64) (float64, float64) {
+	return float64(octopusX + len(octopusHead[0]) - 1), float64(octopusTop(s) + 2)
+}
+
+func drawOctopus(set func(int, int, color.RGBA), s float64) {
+	top := octopusTop(s)
+	hx := octopusX
+	// Small tentacles waving under the head.
+	for k := 0; k < 4; k++ {
+		for j := 0; j < 2; j++ {
+			wig := int(math.Round(math.Sin(s*6+float64(k)+float64(j)) * 0.6))
+			set(hx+k*2+wig, top+len(octopusHead)+j, c64['m'])
+		}
+	}
+	// The swiping tentacle: a curve from the head to its tip, bending
+	// with the swing, with a lighter tip.
+	if tx, ty, out := tentacleTip(s); out {
+		bx, by := tentacleBase(s)
+		mx, my := (bx+tx)/2-1.5, (by+ty)/2-1.5 // the bend
+		for i := 0; i <= 12; i++ {
+			u := float64(i) / 12
+			x := (1-u)*(1-u)*bx + 2*(1-u)*u*mx + u*u*tx
+			y := (1-u)*(1-u)*by + 2*(1-u)*u*my + u*u*ty
+			c := c64['m']
+			if i >= 10 {
+				c = c64['p']
+			}
+			set(int(math.Round(x)), int(math.Round(y)), c)
+		}
+	}
+	// The head, outlined in black where it is out of the water, as C64
+	// sprites were, so it stands out from the night.
+	for sy := -1; sy <= len(octopusHead); sy++ {
+		for sx := -1; sx <= len(octopusHead[0]); sx++ {
+			if headAt(sx, sy) || !(headAt(sx-1, sy) || headAt(sx+1, sy) || headAt(sx, sy-1) || headAt(sx, sy+1)) {
+				continue
+			}
+			if top+sy < waterY {
+				set(hx+sx, top+sy, c64['k'])
+			}
+		}
+	}
+	drawSprite(set, octopusHead, hx, top)
+}
+
+func headAt(sx, sy int) bool {
+	return sy >= 0 && sy < len(octopusHead) && sx >= 0 && sx < len(octopusHead[sy]) && octopusHead[sy][sx] != '.'
+}
+
+// drawSplashes throws up droplets where the octopus breaks the surface and
+// where its tentacle slaps the water.
+func drawSplashes(set func(int, int, color.RGBA), s float64) {
+	splash := func(cx float64, since float64) {
+		if since < 0 || since > 0.4 {
+			return
+		}
+		h := since / 0.4
+		for i, dx := range []float64{-3, -2, -1, 1, 2, 3} {
+			// Droplets fly up and out, then fall back.
+			x := cx + dx*(0.5+h)
+			y := float64(waterY) - (3-math.Abs(dx)*0.6)*math.Sin(h*math.Pi) - float64(i%2)
+			c := c64['w']
+			if i%2 == 1 {
+				c = c64['c']
+			}
+			set(int(math.Round(x)), int(math.Round(y)), c)
+		}
+	}
+	splash(float64(octopusX)+3, s-(riseFrom+riseTo)/2)
+	tx, _, _ := tentacleTip(swipeTo)
+	splash(tx, s-swipeTo)
+}
 
 // letterOffset is how far above its resting row letter i is at time s: it
 // drops from above the scene, then bounces, each bounce lower.

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,11 +23,14 @@ func TestSceneEndsAtRest(t *testing.T) {
 			t.Errorf("letter %d already in at the start", i)
 		}
 	}
-	if x := subXAt(arriveAt); x != dockedX {
-		t.Errorf("submarine at %v when it should be moored at %d", x, dockedX)
+	if x := boatXAt(arriveAt); x != dockedX {
+		t.Errorf("boat at %v when it should be moored at %d", x, dockedX)
 	}
-	if tentacleReach(0) != 0 || tentacleReach(SceneLength.Seconds()) != 0 || tentacleReach(1.9) == 0 {
-		t.Error("the tentacle reaches at the wrong time")
+	if _, _, out := tentacleTip(0); out {
+		t.Error("the tentacle is out at the start")
+	}
+	if _, _, out := tentacleTip(SceneLength.Seconds()); out {
+		t.Error("the tentacle is out at the end")
 	}
 	last := Frame(SceneLength)
 	if last.RGBAAt(lampX, waterY-7) != c64['w'] {
@@ -102,7 +106,7 @@ func TestKittyImage(t *testing.T) {
 	if len(raw) != w*h*4 {
 		t.Fatalf("%d bytes of pixels, want %d", len(raw), w*h*4)
 	}
-	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 7}, {octopusX + 4, octopusY + 2}, {SceneW - 1, SceneH - 1}} {
+	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 7}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
 		c := img.RGBAAt(p[0], p[1])
 		i := ((p[1]*kittyScale+3)*w + p[0]*kittyScale + 3) * 4
 		if raw[i] != c.R || raw[i+1] != c.G || raw[i+2] != c.B || raw[i+3] != 0xff {
@@ -179,31 +183,38 @@ func TestHeaderPrintKeepsAnimating(t *testing.T) {
 	}
 }
 
-// TestStory checks the scene tells its story: the submarine stays clear of
-// the octopus's head, the tentacle reaches up behind it, and it moors on
-// the surface alongside the pier.
+// TestStory checks the scene tells its story, every 10 ms: the octopus
+// stays under water until the boat has passed it, then surfaces; its
+// tentacle never touches the boat; it ends with only its eyes above the
+// water, and the boat moored on the waterline short of the pier.
 func TestStory(t *testing.T) {
-	headTop := octopusY - 1 // with its outline
+	surfaced := false
 	for ms := 0; ms <= int(SceneLength/time.Millisecond); ms += 10 {
 		s := float64(ms) / 1000
-		x, y := submarinePos(s)
-		bottom := y + len(submarine) - 1
-		over := x+float64(len(submarine[0])) > float64(octopusX) && x < float64(octopusX+len(octopusHead[0]))
-		if over && bottom >= headTop {
-			t.Fatalf("at %.2fs the submarine (rows %d-%d) touches the octopus (from row %d)", s, y, bottom, headTop)
+		bx, by := boatPos(s)
+		top := octopusTop(s)
+		if top < waterY {
+			if !surfaced && bx < octopusX+len(octopusHead[0]) {
+				t.Fatalf("at %.2fs the octopus surfaces before the boat (column %d) has passed it", s, bx)
+			}
+			surfaced = true
 		}
-		if r := tentacleReach(s); r > 0 {
-			tip := octopusX + len(octopusHead[0]) - 3 + r/2
-			if tip >= int(x) && tip < int(x)+len(submarine[0]) && octopusY-r <= bottom {
-				t.Fatalf("at %.2fs the tentacle (column %d, up to row %d) hits the submarine", s, tip, octopusY-r)
+		if tx, ty, out := tentacleTip(s); out {
+			x, y := int(math.Round(tx)), int(math.Round(ty))
+			if x >= bx && x < bx+len(boat[0]) && y >= by && y < by+len(boat) {
+				t.Fatalf("at %.2fs the tentacle hits the boat", s)
 			}
 		}
 	}
-	x, y := submarinePos(SceneLength.Seconds())
-	if int(x) != dockedX || y != surfacedY {
-		t.Errorf("ends at (%v, %d), want moored at (%d, %d)", x, y, dockedX, surfacedY)
+	if !surfaced {
+		t.Error("the octopus never surfaces")
 	}
-	if int(x)+len(submarine[0]) > pierX {
-		t.Error("moored into the pier")
+	end := SceneLength.Seconds()
+	if top := octopusTop(end); top+2 >= waterY || top+3 < waterY {
+		t.Errorf("at the end the octopus's top is row %d; only its eyes (row 2) should be above the waterline %d", top, waterY)
+	}
+	bx, by := boatPos(end)
+	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > pierX {
+		t.Errorf("the boat ends at (%d, %d), not moored on the waterline before the pier", bx, by)
 	}
 }
