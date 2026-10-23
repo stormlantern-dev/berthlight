@@ -33,11 +33,24 @@ func TestSceneEndsAtRest(t *testing.T) {
 		t.Error("the tentacle is out at the end")
 	}
 	last := Frame(SceneLength)
-	if last.RGBAAt(lampX, waterY-7) != c64['w'] {
-		t.Error("the lamp is not lit at the end")
-	}
-	if Frame(0).RGBAAt(lampX, waterY-7) == c64['w'] {
-		t.Error("the lamp is lit at the start")
+	for k, house := range houses {
+		x, y := houseAt(k)
+		for sy, row := range house {
+			for wx := range len(row) {
+				if row[wx] != 'L' {
+					continue
+				}
+				if last.RGBAAt(x+wx, y+sy) != c64['y'] {
+					t.Errorf("house %d's window is dark at the end", k)
+				}
+				if Frame(0).RGBAAt(x+wx, y+sy) == c64['y'] {
+					t.Errorf("house %d's window is lit at the start", k)
+				}
+			}
+		}
+		if x+len(house[0]) > SceneW {
+			t.Errorf("house %d does not fit", k)
+		}
 	}
 	// After SceneLength the frame does not change, so a stopped header
 	// and a static one look the same.
@@ -106,7 +119,7 @@ func TestKittyImage(t *testing.T) {
 	if len(raw) != w*h*4 {
 		t.Fatalf("%d bytes of pixels, want %d", len(raw), w*h*4)
 	}
-	for _, p := range [][2]int{{0, 0}, {lampX, waterY - 7}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
+	for _, p := range [][2]int{{0, 0}, {shoreX + 2, waterY - 3}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
 		c := img.RGBAAt(p[0], p[1])
 		i := ((p[1]*kittyScale+3)*w + p[0]*kittyScale + 3) * 4
 		if raw[i] != c.R || raw[i+1] != c.G || raw[i+2] != c.B || raw[i+3] != 0xff {
@@ -217,7 +230,7 @@ func TestStory(t *testing.T) {
 		t.Errorf("at the end the octopus's top is row %d; only its eyes (row 2) should be above the waterline %d", top, waterY)
 	}
 	bx, by := boatPos(end)
-	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > pierX {
+	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > jettyX {
 		t.Errorf("the boat ends at (%d, %d), not moored on the waterline before the pier", bx, by)
 	}
 }

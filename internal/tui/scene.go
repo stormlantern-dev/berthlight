@@ -12,7 +12,8 @@ import (
 // drop in and bounce. Below, at the waterline, a little sailing boat
 // passes; a small octopus surfaces and swipes a tentacle at it, misses
 // just behind the stern with a splash, and sinks back until only its eyes
-// show; the boat moors at a pier whose lamp then comes on. Original pixel
+// show; the boat moors at the jetty of a little village, whose windows
+// then light up one by one. Original pixel
 // art, drawn at the C64's chunky resolution.
 
 // Scene size in pixels. On a terminal each pixel is a half cell (two per
@@ -57,6 +58,32 @@ var (
 		"nooooooooo",
 		".oooooooo.",
 	}
+	// Three little houses on the shore; 'L' is a window, dark until the
+	// boat has moored, then lit.
+	houses = [][]string{
+		{
+			"..r..",
+			".rrr.",
+			"rrrrr",
+			".LiL.",
+			".ini.",
+		},
+		{
+			"...d.",
+			"..od.",
+			".ooo.",
+			"ooooo",
+			".LwL.",
+			".wnw.",
+		},
+		{
+			"..p..",
+			".ppp.",
+			"ppppp",
+			".LiL.",
+			".ini.",
+		},
+	}
 	// A small octopus's head; its tentacles are drawn apart, so they move.
 	octopusHead = []string{
 		"..mmm..",
@@ -87,10 +114,10 @@ const (
 	waterY = 14 // the waterline
 	// The boat's top row: its hull's lower row lies on the waterline.
 	boatY    = waterY - 5
-	dockedX  = 59 // boat's left column when moored
-	pierX    = 70 // the pier's left end
-	lampX    = 77 // the lamp post
-	octopusX = 30 // octopus head's left column
+	dockedX  = 51 // boat's left column when moored
+	jettyX   = 61 // the jetty's left end, reaching out from the shore
+	shoreX   = 65 // land from here to the right edge
+	octopusX = 20 // octopus head's left column
 
 	arriveAt = 3.2 // moored
 )
@@ -137,31 +164,10 @@ func Frame(t time.Duration) *image.RGBA {
 			}
 		}
 	}
-	for i, st := range [][2]int{{8, 10}, {19, 12}, {44, 10}, {53, 12}, {66, 11}} {
+	for i, st := range [][2]int{{8, 10}, {19, 12}, {37, 11}, {44, 10}, {53, 12}} {
 		if int(s*3+float64(i))%4 != 0 { // twinkling
 			set(st[0], st[1], c64['i'])
 		}
-	}
-
-	// The pier: a deck just above the water on posts, and a lamp that
-	// comes on when the boat has moored.
-	for x := pierX; x < SceneW; x++ {
-		set(x, waterY-1, c64['o'])
-	}
-	for y := waterY; y < SceneH; y++ {
-		set(pierX+1, y, c64['n'])
-		set(SceneW-2, y, c64['n'])
-	}
-	for y := waterY - 6; y < waterY-1; y++ {
-		set(lampX, y, c64['e'])
-	}
-	if s >= arriveAt {
-		set(lampX, waterY-7, c64['w'])
-		for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {-2, 0}, {2, 0}} {
-			set(lampX+d[0], waterY-7+d[1], c64['y'])
-		}
-	} else {
-		set(lampX, waterY-7, c64['d'])
 	}
 
 	// The octopus, of which only what is above the waterline shows: under
@@ -171,13 +177,14 @@ func Frame(t time.Duration) *image.RGBA {
 			set(x, y, c)
 		}
 	}, s)
-	for x := 0; x < SceneW; x++ {
+	for x := 0; x < shoreX; x++ {
 		c := c64['u']
 		if (x+int(s*8))%6 < 2 {
 			c = c64['c']
 		}
 		set(x, waterY, c)
 	}
+	drawShore(set, s)
 	drawSplashes(set, s)
 
 	// The boat, sailing in level on the water and mooring.
@@ -208,6 +215,50 @@ func Frame(t time.Duration) *image.RGBA {
 	}
 	return img
 }
+
+// drawShore draws the land on the right with its jetty and the village,
+// whose windows light up one after another once the boat has moored.
+func drawShore(set func(int, int, color.RGBA), s float64) {
+	for x := shoreX; x < SceneW; x++ {
+		set(x, waterY-1, c64['g'])
+		for y := waterY; y < SceneH; y++ {
+			set(x, y, c64['n'])
+		}
+	}
+	for x := jettyX; x < shoreX; x++ {
+		set(x, waterY-1, c64['o'])
+	}
+	for y := waterY; y < SceneH; y++ {
+		set(jettyX+1, y, c64['n'])
+	}
+	for k, house := range houses {
+		x, y := houseAt(k)
+		window := c64['d']
+		if s >= lightAt(k) {
+			window = c64['y']
+		}
+		for sy, row := range house {
+			for sx := 0; sx < len(row); sx++ {
+				switch row[sx] {
+				case '.':
+				case 'L':
+					set(x+sx, y+sy, window)
+				default:
+					set(x+sx, y+sy, c64[row[sx]])
+				}
+			}
+		}
+	}
+}
+
+// houseAt is where house k's top left is: side by side on the shore,
+// standing on the grass.
+func houseAt(k int) (int, int) {
+	return shoreX + k*5, waterY - 1 - len(houses[k])
+}
+
+// lightAt is when house k's window lights up.
+func lightAt(k int) float64 { return arriveAt + 0.2*float64(k) }
 
 func drawSprite(set func(int, int, color.RGBA), sprite []string, x, y int) {
 	for sy, row := range sprite {
