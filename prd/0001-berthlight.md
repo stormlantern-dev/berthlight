@@ -238,7 +238,9 @@ serves; the proxy container has no DNS credentials in its environment or mounts.
 binary. `berthlight skill install` writes it to the skill directory of each
 agent asked for: Claude Code, Codex, OpenCode and pi, user-wide or per project
 (`--project`). The skill tells an agent when and how to use R5 and R6, and how
-to update a project's documentation and OAuth redirect URIs.
+to update a project's documentation and OAuth redirect URIs. Codex, OpenCode
+and pi all read the shared Agent Skills location `.agents/skills`, and Claude
+Code reads `.claude/skills`, so one install for all four writes two copies.
 
 *Fit:* tests assert the target path per agent and scope, against each agent's
 current documentation; the `SKILL.md` passes the format's validation (name

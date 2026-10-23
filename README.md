@@ -50,6 +50,11 @@ berthlight url      # this worktree's URL
 berthlight status   # the proxy and every route, and what is wrong if anything is
 ```
 
+Coding agents can do the wiring too. `berthlight skill install` installs a
+skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
+server settings, docs and OAuth redirect URIs around it. Add `--project` to
+put it in the repository for everyone working on it.
+
 ## Development
 
 Open the repository in its devcontainer, or use Go 1.27 on the host:
