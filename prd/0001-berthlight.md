@@ -1,6 +1,6 @@
 # berthlight: stable names for devcontainer dev servers
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-23
 - **Tracking issue:** #1, which holds the test plan and the verification record
 - **First consumers:** two private projects of the author: a design system

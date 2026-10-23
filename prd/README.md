@@ -21,4 +21,4 @@ parallel never collide.
 
 | PRD | Status | Issue |
 |---|---|---|
-| [berthlight: stable names for devcontainer dev servers](0001-berthlight.md) | Proposed | #1 |
+| [berthlight: stable names for devcontainer dev servers](0001-berthlight.md) | Accepted | #1 |
