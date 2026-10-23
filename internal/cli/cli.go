@@ -2,16 +2,21 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
+
+	"stormlantern.nl/berthlight/internal/tui"
 )
 
 // DefaultPort is the proxy's port on loopback (PRD 0001, R2).
@@ -119,6 +124,32 @@ func imageTag() string {
 
 // Run runs one command and returns the exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
+	// The header, on a terminal (PRD 0001, R12). Without arguments, and
+	// for `demo`, the scene is the show and plays to its end; otherwise it
+	// animates only while the command works, and stops on its last frame
+	// at the command's first output.
+	if wantsHeader(args) {
+		h := tui.StartHeader(stdout, currentVersion())
+		show := len(args) == 0 || args[0] == "demo"
+		switch {
+		case show && h != nil:
+			if len(args) == 0 {
+				var b strings.Builder
+				usage(&b)
+				h.Print("\n" + b.String())
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			h.Play(ctx)
+			stop()
+			return 0
+		case show && len(args) > 0:
+			fmt.Fprintln(stdout, "berthlight demo plays on a terminal (not in CI, nor with BERTHLIGHT_NO_ANIMATION set).")
+			return 0
+		case h != nil:
+			defer h.Stop()
+			stdout, stderr = h.Wrap(stdout), h.Wrap(stderr)
+		}
+	}
 	if len(args) == 0 {
 		usage(stderr)
 		return 2
@@ -180,6 +211,7 @@ Commands:
   down                         stop the proxy
   url [--copy]                 print the URL of the current worktree's dev server
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
+  demo                         play the header animation
   version                      print the version
 
 Environment:
@@ -193,6 +225,26 @@ Environment:
 }
 
 // newFlags returns a flag set that prints its errors to stderr.
+// wantsHeader says whether a command shows the header: not the ones whose
+// output scripts read (url, JSON, the skill's text) and not the proxy.
+func wantsHeader(args []string) bool {
+	for _, a := range args {
+		if a == "--json" || a == "-json" {
+			return false
+		}
+	}
+	if len(args) == 0 {
+		return true
+	}
+	switch args[0] {
+	case "url", "proxy":
+		return false
+	case "skill":
+		return len(args) < 2 || args[1] != "show"
+	}
+	return true
+}
+
 func newFlags(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)

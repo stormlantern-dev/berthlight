@@ -59,7 +59,7 @@ type Term struct {
 
 // NewTerm returns a Term for w if it is an interactive terminal.
 func NewTerm(w io.Writer) Term {
-	f, ok := w.(*os.File)
+	f, ok := fileOf(w)
 	if !ok || !isTerminal(f) {
 		return Term{w: w}
 	}
