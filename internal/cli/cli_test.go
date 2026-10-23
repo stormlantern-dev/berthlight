@@ -359,3 +359,24 @@ func TestWatch(t *testing.T) {
 		t.Errorf("plain watch:\n got %q\nwant %q", plain, wantPlain)
 	}
 }
+
+func TestWantsHeader(t *testing.T) {
+	for args, want := range map[string]bool{
+		"":               true,
+		"ls":             true,
+		"status --watch": true,
+		"up":             true,
+		"demo":           true,
+		"skill install":  true,
+		"url":            false,
+		"url --copy":     false,
+		"ls --json":      false,
+		"status --json":  false,
+		"proxy":          false,
+		"skill show":     false,
+	} {
+		if got := wantsHeader(strings.Fields(args)); got != want {
+			t.Errorf("wantsHeader(%q) = %v, want %v", args, got, want)
+		}
+	}
+}

@@ -302,8 +302,16 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   WezTerm and iTerm2; OSC 99 in Kitty). Progress goes only to terminals known
   to support it (Ghostty, Windows Terminal), since elsewhere OSC 9 shows as a
   notification.
-- **Graphics (MAY).** Where the Kitty graphics protocol is available (Kitty,
-  Ghostty), a pixel-art boat in place of the Unicode one.
+- **Header.** A small demo scene in the spirit of the C64 and Amiga heads
+  each interactive command: copper bars, the letters of the name dropping in
+  and bouncing, and at the waterline a little sailing boat passing a small
+  octopus that surfaces, swipes a tentacle at it and misses, before the boat
+  moors at a pier whose light comes on. Animated where the Kitty graphics protocol
+  is available (Kitty, Ghostty) while the command works, at most 4 seconds,
+  and on its last frame at the command's first output, so it never holds a
+  command up; the last frame in half blocks on other truecolor terminals;
+  one line of text elsewhere. Without arguments, and as `berthlight demo`, it
+  plays to its end. Not for `url`, `proxy`, `skill show` or `--json`.
 - **Plain without a terminal.** Animations and escape sequences go to
   standard error, and only when it is a terminal; standard output is the same
   with or without one. No animation with `TERM=dumb`, in CI, or with

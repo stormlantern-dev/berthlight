@@ -148,7 +148,7 @@ type Progress struct {
 // Start sets sail with msg if w is an interactive terminal, and returns
 // nil otherwise.
 func Start(w io.Writer, msg string) *Progress {
-	f, ok := w.(*os.File)
+	f, ok := fileOf(w)
 	if !ok || !Interactive(f) {
 		return nil
 	}
