@@ -67,7 +67,7 @@ func (e *env) name(s string) string { return e.id + "-" + s }
 
 func (e *env) cleanup() {
 	if e.t.Failed() {
-		logs, err := e.run.Run("logs", e.proxy)
+		logs, err := e.run.Logs(e.proxy)
 		e.t.Logf("proxy logs (%v):\n%s", err, logs)
 		insp, _ := e.run.Run("container", "inspect", "--format", "{{json .NetworkSettings}}", e.proxy)
 		e.t.Logf("proxy network settings: %s", insp)

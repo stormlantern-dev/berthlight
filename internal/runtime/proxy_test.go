@@ -7,7 +7,7 @@ import (
 
 func TestRunArgs(t *testing.T) {
 	s := ProxySpec{Name: "berthlight", Image: "img:1", HostPort: 7480, StateDir: "/home/u/.local/state/berthlight", Bases: []string{"localhost", "dev.example.com"}}
-	got := strings.Join(s.RunArgs(true), " ")
+	got := strings.Join(s.RunArgs(true, false), " ")
 	for _, want := range []string{
 		"--network berthlight",
 		"--read-only",
@@ -28,8 +28,15 @@ func TestRunArgs(t *testing.T) {
 			t.Errorf("run args contain %q:\n%s", bad, got)
 		}
 	}
-	if v4 := strings.Join(s.RunArgs(false), " "); strings.Contains(v4, "::1") {
+	if v4 := strings.Join(s.RunArgs(false, false), " "); strings.Contains(v4, "::1") {
 		t.Errorf("ipv6=false still publishes on ::1: %s", v4)
+	}
+}
+
+func TestRunArgsGatewayPriority(t *testing.T) {
+	s := ProxySpec{Name: "berthlight", Image: "img", HostPort: 7480, StateDir: "/s"}
+	if got := strings.Join(s.RunArgs(false, true), " "); !strings.Contains(got, "--network name=berthlight,gw-priority=1000") {
+		t.Errorf("gw-priority missing: %s", got)
 	}
 }
 

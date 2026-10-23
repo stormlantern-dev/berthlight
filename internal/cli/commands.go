@@ -104,9 +104,24 @@ func cmdRm(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	network := route.NetworkName(name)
+	// Recreate the proxy rather than disconnect it: on rootless Podman, a
+	// disconnect breaks the published port's forwarding. The new proxy
+	// starts on its own network and joins the remaining routes' networks.
 	if exists, _ := run.ContainerState(c.ProxyName); exists {
-		if err := run.Disconnect(network, c.ProxyName); err != nil {
+		nets, err := run.ContainerNetworks(c.ProxyName)
+		if err != nil {
 			return err
+		}
+		for _, n := range nets {
+			if n == network {
+				if err := run.RemoveContainer(c.ProxyName); err != nil {
+					return err
+				}
+				if err := up(c, run); err != nil {
+					return err
+				}
+				break
+			}
 		}
 	}
 	if run.NetworkExists(network) {

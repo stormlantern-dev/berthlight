@@ -2,9 +2,9 @@ package route
 
 import (
 	"context"
-	goruntime "runtime"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sync"
 	"testing"
 	"time"

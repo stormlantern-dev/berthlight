@@ -66,6 +66,12 @@ func filterNoise(s string) string {
 	return strings.Join(keep, "\n")
 }
 
+// Logs returns a container's output, standard output and error together.
+func (r Runtime) Logs(name string) (string, error) {
+	out, err := exec.Command(r.Bin, "logs", name).CombinedOutput()
+	return filterNoise(string(out)), err
+}
+
 // NetworkExists reports whether a network with this name exists.
 func (r Runtime) NetworkExists(name string) bool {
 	_, err := r.Run("network", "inspect", name)
