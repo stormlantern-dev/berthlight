@@ -205,10 +205,15 @@ func Frame(t time.Duration) *image.RGBA {
 	bx, by := boatPos(s)
 	drawSprite(set, boat, bx, by)
 
-	// The word, its letters dropping in one after another and bouncing.
+	// The word, its letters dropping in one after another and bouncing;
+	// when the lights come on, the e works loose and sags.
 	colours := []byte{'w', 'y', 'l', 'c', 'w', 'y', 'l', 'c', 'w', 'y'}
 	for i, r := range word {
 		y := wordY + letterOffset(s, i)
+		sag, tilt := 0, 0
+		if i == looseLetter {
+			sag, tilt = letterSag(s)
+		}
 		c := c64[colours[(i+int(s*6))%len(colours)]]
 		if s >= SceneLength.Seconds() {
 			c = c64[colours[i%len(colours)]]
@@ -220,8 +225,12 @@ func Frame(t time.Duration) *image.RGBA {
 		}{{1, 1, c64['k']}, {0, 0, c}} {
 			for gy, row := range font[r] {
 				for gx, ch := range row {
-					if ch == 'x' && y+gy+layer.dy < skyY {
-						set(wordX+i*6+gx+layer.dx, y+gy+layer.dy, layer.c)
+					if ch == 'x' {
+						dy := sag
+						if gx >= 3 {
+							dy += tilt // the right side hangs lower
+						}
+						set(wordX+i*6+gx+layer.dx, y+gy+dy+layer.dy, layer.c)
 					}
 				}
 			}
@@ -436,6 +445,34 @@ func drawSplashes(set func(int, int, color.RGBA), s float64) {
 	splash(float64(octopusX)+3, s-(riseFrom+riseTo)/2)
 	tx, _, _ := tentacleTip(swipeTo)
 	splash(tx, s-swipeTo)
+}
+
+// looseLetter is the letter that works loose when the lights come on: the
+// e of berthlight.
+const looseLetter = 1
+
+// sagFrom is when the e starts to wobble: just after the first lights.
+const sagFrom = arriveAt + 0.25
+
+// letterSag is how far the loose letter has sagged at time s, and how much
+// lower its right side hangs: a wobble, a drop of two pixels with a small
+// bounce, and then it stays, crooked.
+func letterSag(s float64) (sag, tilt int) {
+	t := s - sagFrom
+	switch {
+	case t < 0:
+		return 0, 0
+	case t < 0.15: // wobble
+		if int(t*40)%2 == 0 {
+			return 0, 1
+		}
+		return 0, -1
+	case t < 0.25: // drop
+		return 1, 1
+	case t < 0.32:
+		return 3, 1 // a pixel too far
+	}
+	return 2, 1 // and back up, hanging crooked
 }
 
 // letterOffset is how far above its resting row letter i is at time s: it

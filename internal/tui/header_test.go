@@ -15,6 +15,18 @@ import (
 )
 
 func TestSceneEndsAtRest(t *testing.T) {
+	if word[looseLetter] != 'e' {
+		t.Error("the loose letter is not the e")
+	}
+	if sag, tilt := letterSag(sagFrom - 0.01); sag != 0 || tilt != 0 {
+		t.Error("the e sags before the lights come on")
+	}
+	if sag, tilt := letterSag(SceneLength.Seconds()); sag != 2 || tilt != 1 {
+		t.Errorf("at the end the e hangs %d down, tilted %d; want 2 down and crooked", sag, tilt)
+	}
+	if sagFrom < arriveAt || sagFrom+0.32 > SceneLength.Seconds() {
+		t.Error("the e does not sag between the lights coming on and the end")
+	}
 	for i := range word {
 		if off := letterOffset(SceneLength.Seconds(), i); off != 0 {
 			t.Errorf("letter %d still %d px off at the end", i, off)
