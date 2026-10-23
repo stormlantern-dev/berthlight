@@ -1,0 +1,10 @@
+// Webshop development container.
+{
+  /* The image is pinned by the lock file. */
+  "name": "shop",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:2", // node 22
+  "forwardPorts": [5432],
+  "postCreateCommand": "npm ci", // keep this comment
+  "runArgs": ["--network=bl-${localWorkspaceFolderBasename}", "--network-alias=bl-${localWorkspaceFolderBasename}"],
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"],
+}

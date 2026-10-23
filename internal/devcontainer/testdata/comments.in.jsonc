@@ -1,0 +1,10 @@
+// Webshop development container.
+{
+  /* The image is pinned by the lock file. */
+  "name": "shop",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:2", // node 22
+  // Vite's dev server.
+  "appPort": 8080, // published for the browser
+  "forwardPorts": [5432],
+  "postCreateCommand": "npm ci", // keep this comment
+}

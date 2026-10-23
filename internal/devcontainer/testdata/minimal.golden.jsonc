@@ -1,0 +1,6 @@
+{
+  "name": "shop",
+  "image": "mcr.microsoft.com/devcontainers/go:2",
+  "runArgs": ["--network=bl-${localWorkspaceFolderBasename}", "--network-alias=bl-${localWorkspaceFolderBasename}"],
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"]
+}

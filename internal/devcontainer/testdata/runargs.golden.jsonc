@@ -1,0 +1,6 @@
+{
+  "image": "node:22",
+  "runArgs": ["--init", "--network=bl-${localWorkspaceFolderBasename}", "--cap-drop=ALL", "--network-alias=bl-${localWorkspaceFolderBasename}"],
+  "appPort": [3000, "9229:9229"],
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"]
+}

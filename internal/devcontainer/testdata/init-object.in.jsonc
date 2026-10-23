@@ -1,0 +1,7 @@
+{
+  "image": "node:22",
+  "initializeCommand": {
+    "env": "touch .env",
+    "cache": ["mkdir", "-p", ".cache"],
+  },
+}

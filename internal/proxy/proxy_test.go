@@ -102,6 +102,39 @@ func TestRouting(t *testing.T) {
 	}
 }
 
+// TestErrorHeader: the proxy marks its own error responses with the
+// reason, so status can tell them from a dev server's (PRD 0001, R6).
+func TestErrorHeader(t *testing.T) {
+	h := NewHandler()
+	h.Logf = func(string, ...any) {}
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "refused", Target: "127.0.0.1", Port: freePort(t)})
+	tab.Put(route.Route{Name: "unresolved", Target: "no-such-host.invalid", Port: 8080})
+	tab.Put(backendRoute(t, "fine", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "app's own 502", http.StatusBadGateway)
+	})))
+	h.SetTable(tab)
+	front := httptest.NewServer(h)
+	defer front.Close()
+	for host, want := range map[string]string{
+		"nope.localhost":       ErrNoRoute,
+		"refused.localhost":    ErrRefused,
+		"unresolved.localhost": ErrUnresolved,
+		"fine.localhost":       "",
+	} {
+		req, _ := http.NewRequest("GET", front.URL, nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get(ErrorHeader); got != want {
+			t.Errorf("%s: %s %q, want %q", host, ErrorHeader, got, want)
+		}
+	}
+}
+
 func freePort(t *testing.T) int {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

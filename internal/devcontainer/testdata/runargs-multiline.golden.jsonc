@@ -1,0 +1,14 @@
+{
+  "image": "node:22",
+  "runArgs": [
+    "--init", // reap zombies
+    "--userns=keep-id",
+    "--network=bl-${localWorkspaceFolderBasename}",
+    "--network-alias=bl-${localWorkspaceFolderBasename}"
+  ],
+  "appPort": [
+    "8080/udp",
+    3000
+  ],
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "-C", "${localWorkspaceFolder}", "8080"]
+}

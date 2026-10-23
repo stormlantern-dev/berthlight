@@ -131,6 +131,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		"down":  cmdDown,
 		"url":   cmdURL,
 		"proxy": cmdProxy,
+
+		"status":       cmdStatus,
+		"devcontainer": cmdDevcontainer,
 	}
 	switch args[0] {
 	case "version", "--version":
@@ -150,6 +153,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) || errors.Is(err, errUsage) {
 			return 2
 		}
+		if errors.Is(err, errProblems) {
+			return 1
+		}
 		fmt.Fprintln(stderr, "berthlight:", err)
 		return 1
 	}
@@ -162,13 +168,17 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage: berthlight <command> [flags]
 
 Commands:
-  add <name> <port>   route <name>.localhost to a container's port
-  rm <name>           remove a route
-  ls                  list routes
-  up                  start the proxy (add does this too)
-  down                stop the proxy
-  url                 print the URL of the current worktree's dev server
-  version             print the version
+  add [<name>] <port>          route <name>.localhost to a container's port
+                               (without <name>: the current worktree's name)
+  rm <name>                    remove a route
+  ls                           list routes
+  status                       check the proxy and each route, say what is wrong
+  devcontainer <project> <port>
+                               wire the project's devcontainer.json to berthlight
+  up                           start the proxy (add does this too)
+  down                         stop the proxy
+  url                          print the URL of the current worktree's dev server
+  version                      print the version
 
 Environment:
   BERTHLIGHT_RUNTIME     docker or podman (default: whichever is installed, docker first)

@@ -20,6 +20,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,24 +101,142 @@ func (e *env) cli(args ...string) string {
 // network under the route's name as alias.
 func (e *env) backend(routeName, body string) {
 	e.t.Helper()
-	network := route.NetworkName(routeName)
+	e.backendOn(routeName, route.NetworkName(routeName), routeName, body)
+}
+
+// backendOn starts a busybox web server answering body on port 8080, as
+// container name on network under alias. An empty body starts a container
+// with nothing listening.
+func (e *env) backendOn(name, network, alias, body string) {
+	e.t.Helper()
 	if err := e.run.EnsureNetwork(network, "route"); err != nil {
 		e.t.Fatal(err)
 	}
-	_, err := e.run.Run("run", "-d", "--name", routeName, "--network", network, "--network-alias", routeName,
-		backendImage, "sh", "-c", fmt.Sprintf("mkdir /www && echo %s > /www/index.html && httpd -f -p 8080 -h /www", body))
+	cmd := fmt.Sprintf("mkdir /www && echo %s > /www/index.html && httpd -f -p 8080 -h /www", body)
+	if body == "" {
+		cmd = "sleep 600"
+	}
+	_, err := e.run.Run("run", "-d", "--name", name, "--network", network, "--network-alias", alias, backendImage, "sh", "-c", cmd)
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	if body == "" {
+		return
+	}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if _, err := e.run.Run("exec", routeName, "wget", "-q", "-O-", "http://127.0.0.1:8080/"); err == nil {
+		if _, err := e.run.Run("exec", name, "wget", "-q", "-O-", "http://127.0.0.1:8080/"); err == nil {
 			return
 		}
 		if time.Now().After(deadline) {
-			e.t.Fatalf("backend %s did not start", routeName)
+			e.t.Fatalf("backend %s did not start", name)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// status runs `berthlight status` and returns its exit code and output.
+func (e *env) status() (int, string) {
+	var out bytes.Buffer
+	code := cli.Run([]string{"status"}, &out, &out)
+	return code, out.String()
+}
+
+// waitStatus polls status until its output contains want.
+func (e *env) waitStatus(want string, code int) {
+	e.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		c, out := e.status()
+		if c == code && strings.Contains(out, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("status did not report %q (exit %d) within 10s; last (exit %d):\n%s", want, code, c, out)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestDevcontainerRoute follows what a devcontainer wired by `berthlight
+// devcontainer` does (PRD 0001, R5), and what status says at each step (R6).
+func TestDevcontainerRoute(t *testing.T) {
+	e := setup(t)
+	project := e.name("shop")
+	// The workspace folder: a git repository whose directory name gives
+	// the network, as ${localWorkspaceFolderBasename} does.
+	ws := filepath.Join(t.TempDir(), e.name("webshop"))
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", ws).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	network := "bl-" + filepath.Base(ws)
+	initCmd := []string{"add", "--project", project, "--target", network, "--network", network, "-C", ws, "8080"}
+
+	// initializeCommand, before the container exists.
+	e.cli(initCmd...)
+	if !e.run.NetworkExists(network) {
+		t.Fatalf("network %s not created", network)
+	}
+	e.waitStatus(`no container answers to "`+network+`" on network `+network, 1)
+
+	// The container starts with runArgs --network and --network-alias,
+	// but its dev server is not up yet.
+	e.backendOn(e.name("dc"), network, network, "")
+	e.waitStatus("nothing listens on port 8080", 1)
+	e.run.Run("rm", "-f", e.name("dc"))
+
+	e.backendOn(e.name("dc"), network, network, "hello-from-devcontainer")
+	e.waitBody(project+".localhost", "hello-from-devcontainer", 10*time.Second)
+	e.waitStatus("ok, HTTP 200", 0)
+	if _, out := e.status(); !strings.Contains(out, "http://"+project+".localhost:"+strconv.Itoa(e.port)) {
+		t.Errorf("status lacks the URL:\n%s", out)
+	}
+
+	// R4: a second worktree of the project gets its own name, network and
+	// alias, and each name reaches its own container, though the proxy is
+	// on both networks.
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", ws, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v %s", strings.Join(args, " "), err, out)
+		}
+	}
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	wt := ws + "-fix-login"
+	git("worktree", "add", "-q", wt)
+	network2 := "bl-" + filepath.Base(wt)
+	e.cli("add", "--project", project, "--target", network2, "--network", network2, "-C", wt, "8080")
+	e.backendOn(e.name("dc2"), network2, network2, "hello-from-fix-login")
+	e.waitBody(project+"-fix-login.localhost", "hello-from-fix-login", 10*time.Second)
+	for i := 0; i < 10; i++ {
+		e.waitBody(project+".localhost", "hello-from-devcontainer", time.Second)
+		e.waitBody(project+"-fix-login.localhost", "hello-from-fix-login", time.Second)
+	}
+	e.run.Run("rm", "-f", e.name("dc2"))
+	e.cli("rm", project+"-fix-login")
+
+	// Rebuilding the container runs initializeCommand again: no change.
+	e.cli(initCmd...)
+	// Another checkout with the same name is refused.
+	var out bytes.Buffer
+	if code := cli.Run([]string{"add", project, "8080", "--network", "bl-" + e.name("other")}, &out, &out); code != 1 || !strings.Contains(out.String(), "--replace") {
+		t.Errorf("add over another checkout's route: %d %s", code, out.String())
+	}
+
+	e.cli("down")
+	e.waitStatus("does not exist; start it with: berthlight up", 1)
+	e.cli("up")
+	e.waitStatus("ok, HTTP 200", 0)
+
+	// rm takes the route's own network away.
+	e.run.Run("rm", "-f", e.name("dc"))
+	e.cli("rm", project)
+	if e.run.NetworkExists(network) {
+		t.Errorf("network %s kept after rm", network)
 	}
 }
 
