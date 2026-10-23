@@ -2,11 +2,11 @@ package tui
 
 import (
 	"bytes"
-	"compress/zlib"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/png"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -20,7 +20,8 @@ import (
 // The header (PRD 0001, R12) shows the scene at the top of a command's
 // output on a terminal:
 //   - animated in terminals with the Kitty graphics protocol (Kitty,
-//     Ghostty), for as long as the command is working and at most
+//     Ghostty), in its Amiga version (the chunky one over SSH), for as
+//     long as the command is working and at most
 //     SceneLength; the first output, or the end of the command, puts it on
 //     its last frame, so it never holds a command up;
 //   - as the last frame in half-block characters on other truecolor
@@ -42,7 +43,7 @@ const (
 )
 
 // frameInterval is the time between animation frames.
-const frameInterval = 50 * time.Millisecond
+const frameInterval = 40 * time.Millisecond
 
 // Header is a header on screen. A nil *Header is valid and does nothing.
 type Header struct {
@@ -50,6 +51,9 @@ type Header struct {
 	mode  headerMode
 	id    uint32 // Kitty image id
 	start time.Time
+	// frame draws the scene at a time: the Amiga scene, or the chunky one
+	// over SSH, where each frame costs bandwidth.
+	frame func(time.Duration) *image.RGBA
 
 	mu      sync.Mutex
 	below   int // rows printed under the header by Print
@@ -90,10 +94,14 @@ func StartHeader(w io.Writer, version string) *Header {
 		close(h.done)
 	case modeKitty:
 		h.id = rand.Uint32N(1<<31-2) + 1
+		h.frame = FrameHi
+		if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+			h.frame = Frame
+		}
 		// Make room, then draw the first frame into it.
 		fmt.Fprint(f, strings.Repeat("\n", HeaderRows))
 		h.mu.Lock()
-		h.draw(Frame(0))
+		h.draw(h.frame(0))
 		h.mu.Unlock()
 		go h.animate()
 	}
@@ -129,7 +137,7 @@ func (h *Header) animate() {
 		elapsed := time.Since(h.start)
 		h.mu.Lock()
 		if !h.stopped {
-			h.draw(Frame(elapsed))
+			h.draw(h.frame(elapsed))
 		}
 		h.mu.Unlock()
 		if elapsed >= SceneLength {
@@ -158,7 +166,7 @@ func (h *Header) Stop() {
 		return
 	}
 	h.stopped = true
-	h.draw(Frame(SceneLength))
+	h.draw(h.frame(SceneLength))
 	h.mu.Unlock()
 	close(h.stop)
 	<-h.done
@@ -253,30 +261,29 @@ func HalfBlocks(img *image.RGBA) string {
 	return b.String()
 }
 
-// kittyScale enlarges the scene's pixels before sending, so terminals
-// scale it up crisply rather than blurring it.
-const kittyScale = 8
+// kittyWidth is the width, in pixels, frames are sent at. The scene is
+// enlarged to it pixel for pixel (×8 for the chunky scene, ×2 for the
+// Amiga one), so terminals scale it up crisply rather than blurring it.
+const kittyWidth = SceneW * 8
 
 // KittyImage returns the Kitty graphics commands that show img over
-// SceneW×HeaderRows cells at the cursor: transmit-and-display (a=T) with a
-// fixed image and placement id, so each frame replaces the last; the
-// cursor does not move (C=1); no replies (q=2), which would otherwise
-// arrive as input; zlib-compressed RGBA in chunks of at most 4096 bytes.
+// SceneW×HeaderRows cells at the cursor: transmit-and-display (a=T) of a
+// PNG (f=100) with a fixed image and placement id, so each frame replaces
+// the last; the cursor does not move (C=1); no replies (q=2), which would
+// otherwise arrive as input; in chunks of at most 4096 bytes.
 // https://sw.kovidgoyal.net/kitty/graphics-protocol/
 func KittyImage(img *image.RGBA, id uint32) string {
-	w, h := img.Bounds().Dx()*kittyScale, img.Bounds().Dy()*kittyScale
-	raw := make([]byte, 0, w*h*4)
+	scale := kittyWidth / img.Bounds().Dx()
+	w, h := img.Bounds().Dx()*scale, img.Bounds().Dy()*scale
+	big := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			c := img.RGBAAt(x/kittyScale, y/kittyScale)
-			raw = append(raw, c.R, c.G, c.B, c.A)
+			big.SetRGBA(x, y, img.RGBAAt(x/scale, y/scale))
 		}
 	}
-	var z bytes.Buffer
-	zw := zlib.NewWriter(&z)
-	zw.Write(raw)
-	zw.Close()
-	data := base64.StdEncoding.EncodeToString(z.Bytes())
+	var buf bytes.Buffer
+	(&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, big)
+	data := base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	var b strings.Builder
 	for i := 0; i < len(data); i += 4096 {
@@ -286,8 +293,8 @@ func KittyImage(img *image.RGBA, id uint32) string {
 			more = 1
 		}
 		if i == 0 {
-			fmt.Fprintf(&b, "\x1b_Ga=T,f=32,o=z,s=%d,v=%d,i=%d,p=1,c=%d,r=%d,C=1,q=2,m=%d;%s\x1b\\",
-				w, h, id, SceneW, HeaderRows, more, chunk)
+			fmt.Fprintf(&b, "\x1b_Ga=T,f=100,i=%d,p=1,c=%d,r=%d,C=1,q=2,m=%d;%s\x1b\\",
+				id, SceneW, HeaderRows, more, chunk)
 		} else {
 			fmt.Fprintf(&b, "\x1b_Gm=%d;%s\x1b\\", more, chunk)
 		}

@@ -2,9 +2,10 @@ package tui
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"math"
 	"regexp"
@@ -106,49 +107,50 @@ func TestHalfBlocks(t *testing.T) {
 
 // TestKittyImage checks the command against the Kitty graphics protocol:
 // the keys of the first chunk, chunks of at most 4096 bytes, m=1 on all but
-// the last, and a payload that is the scene, scaled up, as zlib RGBA.
+// the last, and a PNG payload that is the scene, enlarged pixel for pixel,
+// for both the chunky and the Amiga scene.
 func TestKittyImage(t *testing.T) {
-	img := Frame(2 * time.Second)
-	out := KittyImage(img, 7)
-	chunks := regexp.MustCompile(`\x1b_G([^;]*);([^\x1b]*)\x1b\\`).FindAllStringSubmatch(out, -1)
-	if len(chunks) < 2 {
-		t.Fatalf("%d chunks", len(chunks))
-	}
-	w, h := SceneW*kittyScale, SceneH*kittyScale
-	if want := fmt.Sprintf("a=T,f=32,o=z,s=%d,v=%d,i=7,p=1,c=%d,r=%d,C=1,q=2,m=1", w, h, SceneW, HeaderRows); chunks[0][1] != want {
-		t.Errorf("first chunk keys %q, want %q", chunks[0][1], want)
-	}
-	var data string
-	for i, c := range chunks {
-		if len(c[2]) > 4096 {
-			t.Errorf("chunk %d is %d bytes", i, len(c[2]))
+	for _, img := range []*image.RGBA{Frame(2 * time.Second), FrameHi(2 * time.Second)} {
+		out := KittyImage(img, 7)
+		chunks := regexp.MustCompile(`\x1b_G([^;]*);([^\x1b]*)\x1b\\`).FindAllStringSubmatch(out, -1)
+		if len(chunks) < 2 {
+			t.Fatalf("%d chunks", len(chunks))
 		}
-		want := "m=1"
-		if i == len(chunks)-1 {
-			want = "m=0"
+		if want := fmt.Sprintf("a=T,f=100,i=7,p=1,c=%d,r=%d,C=1,q=2,m=1", SceneW, HeaderRows); chunks[0][1] != want {
+			t.Errorf("first chunk keys %q, want %q", chunks[0][1], want)
 		}
-		if !strings.HasSuffix(c[1], want) {
-			t.Errorf("chunk %d keys %q, want %s", i, c[1], want)
+		var data string
+		for i, c := range chunks {
+			if len(c[2]) > 4096 {
+				t.Errorf("chunk %d is %d bytes", i, len(c[2]))
+			}
+			want := "m=1"
+			if i == len(chunks)-1 {
+				want = "m=0"
+			}
+			if !strings.HasSuffix(c[1], want) {
+				t.Errorf("chunk %d keys %q, want %s", i, c[1], want)
+			}
+			data += c[2]
 		}
-		data += c[2]
-	}
-	z, err := base64.StdEncoding.DecodeString(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := zlib.NewReader(bytes.NewReader(z))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := io.ReadAll(r)
-	if len(raw) != w*h*4 {
-		t.Fatalf("%d bytes of pixels, want %d", len(raw), w*h*4)
-	}
-	for _, p := range [][2]int{{0, 0}, {shoreX + 2, waterY - 3}, {octopusX + 2, waterY - 1}, {SceneW - 1, SceneH - 1}} {
-		c := img.RGBAAt(p[0], p[1])
-		i := ((p[1]*kittyScale+3)*w + p[0]*kittyScale + 3) * 4
-		if raw[i] != c.R || raw[i+1] != c.G || raw[i+2] != c.B || raw[i+3] != 0xff {
-			t.Errorf("pixel %v: %v, want %v", p, raw[i:i+4], c)
+		raw, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := png.Decode(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Bounds().Dx() != kittyWidth || got.Bounds().Dy() != kittyWidth*SceneH/SceneW {
+			t.Fatalf("PNG is %v, want %d wide", got.Bounds(), kittyWidth)
+		}
+		scale := kittyWidth / img.Bounds().Dx()
+		for _, p := range [][2]int{{0, 0}, {img.Bounds().Dx() / 2, img.Bounds().Dy() / 2}, {img.Bounds().Dx() - 1, img.Bounds().Dy() - 1}} {
+			r1, g1, b1, _ := got.At(p[0]*scale+scale/2, p[1]*scale+scale/2).RGBA()
+			want := img.RGBAAt(p[0], p[1])
+			if uint8(r1>>8) != want.R || uint8(g1>>8) != want.G || uint8(b1>>8) != want.B {
+				t.Errorf("pixel %v: %v %v %v, want %v", p, r1>>8, g1>>8, b1>>8, want)
+			}
 		}
 	}
 }
@@ -156,7 +158,7 @@ func TestKittyImage(t *testing.T) {
 // testHeader is an animating header writing to a buffer, as StartHeader
 // makes one for a Kitty terminal.
 func testHeader(buf io.Writer) *Header {
-	h := &Header{w: buf, mode: modeKitty, id: 9, start: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	h := &Header{w: buf, mode: modeKitty, id: 9, start: time.Now(), frame: Frame, stop: make(chan struct{}), done: make(chan struct{})}
 	go h.animate()
 	return h
 }
