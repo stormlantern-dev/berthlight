@@ -107,6 +107,9 @@ scoops:
 
 aurs:
   - name: berthlight-bin
+    # Off until the AUR account exists (AUR_ENABLED in release.yml, which
+    # only then starts the agent): the AUR closed registration for a while.
+    disable: '{{ if index .Env "AUR_SSH_AGENT" }}false{{ else }}true{{ end }}'
     description: Stable names for devcontainer dev servers, without published ports.
     homepage: https://github.com/stormlantern-dev/berthlight
     license: Apache-2.0

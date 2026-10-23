@@ -7,7 +7,8 @@
 # App, and the AUR push is signed with an SSH key; both keys live in Cloud
 # KMS and are used through Workload Identity Federation (.github/actions).
 # Repository variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER,
-# TAP_KMS_KEY_VERSION and AUR_KMS_KEY_RING.
+# TAP_KMS_KEY_VERSION and AUR_KMS_KEY_RING. AUR_ENABLED=true turns the AUR
+# on; without it the release publishes everything else.
 name: Release
 
 on:
@@ -57,6 +58,7 @@ jobs:
           kms-key-version: ${{ vars.TAP_KMS_KEY_VERSION }}
       - name: SSH agent with the AUR key
         id: aur
+        if: vars.AUR_ENABLED == 'true'
         uses: ./.github/actions/aur-ssh
         with:
           workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
