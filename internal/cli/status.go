@@ -281,7 +281,11 @@ func changes(prev *status.Report, rep status.Report, c Config) []string {
 	}
 	for _, rs := range rep.Routes {
 		ok, known := was[rs.Route.Name]
-		if !known || ok != rs.OK {
+		switch {
+		case !known && rs.OK: // a new route, up
+			out = append(out, routeLine(host(rs.Route.Name), rs))
+		case !known: // a new route still starting: not news yet
+		case ok != rs.OK:
 			out = append(out, routeLine(host(rs.Route.Name), rs))
 		}
 	}

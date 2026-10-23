@@ -28,6 +28,7 @@ func (f fakeRuntime) NetworkExists(n string) bool                { return f.netw
 
 // fakeProxy answers like the proxy would for each route name.
 func fakeProxy(t *testing.T) int {
+	loading := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		label, _, _ := strings.Cut(r.Host, ".")
 		switch label {
@@ -42,6 +43,14 @@ func fakeProxy(t *testing.T) int {
 		case "noroute":
 			w.Header().Set(proxy.ErrorHeader, proxy.ErrNoRoute)
 			w.WriteHeader(http.StatusNotFound)
+		case "loading": // not loaded at first, then loaded
+			loading++
+			if loading == 1 {
+				w.Header().Set(proxy.ErrorHeader, proxy.ErrNoRoute)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 		default: // unresolved, refused, timeout, upstream
 			w.Header().Set(proxy.ErrorHeader, label)
 			w.WriteHeader(http.StatusBadGateway)
@@ -76,6 +85,7 @@ func checker(rt Runtime, port int) Checker {
 		Runtime: rt, Bin: "podman", ProxyName: "berthlight", Port: port,
 		Bases:   []string{"localhost"},
 		Timeout: 200 * time.Millisecond,
+		Reload:  20 * time.Millisecond,
 		Resolve: func(ctx context.Context, host string) ([]string, error) {
 			return nil, errors.New("unexpected lookup of " + host)
 		},
@@ -119,6 +129,7 @@ func TestRouteProblems(t *testing.T) {
 		want  string
 	}{
 		{"ok", healthy("ok"), true, "HTTP 200"},
+		{"loading", healthy("loading"), true, "HTTP 200"},
 		{"apperror", healthy("apperror"), true, "HTTP 502"},
 		{"redirect", healthy("redirect"), true, "HTTP 302"},
 		{"gone", healthy(), false, "network bl-gone does not exist"},
