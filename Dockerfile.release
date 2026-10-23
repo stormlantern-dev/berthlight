@@ -1,0 +1,9 @@
+# The proxy image as GoReleaser builds it, from the release's own binaries
+# (see Dockerfile for a build from source). Static, no shell, non-root.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/berthlight /berthlight
+USER 65532:65532
+EXPOSE 7480
+ENTRYPOINT ["/berthlight", "proxy"]
+CMD ["--state", "/state"]

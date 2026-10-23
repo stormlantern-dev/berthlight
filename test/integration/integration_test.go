@@ -280,6 +280,17 @@ func TestProxy(t *testing.T) {
 	e.backend(a, "hello-from-a")
 	e.waitBody(a+".localhost", "hello-from-a", 15*time.Second)
 
+	// R4: the name resolves with no change to /etc/hosts or DNS. curl, like
+	// browsers, sends *.localhost to loopback itself.
+	if curl, err := exec.LookPath("curl"); err == nil {
+		out, err := exec.Command(curl, "-sfS", "--max-time", "5", "http://"+a+".localhost:"+strconv.Itoa(e.port)+"/").CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "hello-from-a" {
+			t.Errorf("curl by name: %v %q", err, out)
+		}
+	} else if os.Getenv("CI") != "" {
+		t.Error("curl not found")
+	}
+
 	// R3: a route added while the proxy runs serves within 2 seconds.
 	e.backend(b, "hello-from-b")
 	e.cli("add", b, "8080")

@@ -1,0 +1,172 @@
+# Release configuration (PRD 0001, R9). The release workflow runs it on a
+# version tag; CI runs it as a snapshot on every pull request (R11).
+#
+# Publishing needs, as secrets of the release workflow:
+#   TAP_GITHUB_TOKEN  contents: write on stormlantern-dev/homebrew-tap and
+#                     stormlantern-dev/scoop-bucket
+#   AUR_KEY           private SSH key of the AUR account that owns berthlight-bin
+version: 2
+
+project_name: berthlight
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: berthlight
+    main: ./cmd/berthlight
+    binary: berthlight
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: berthlight
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# Keyless: the signature is bound to the release workflow's identity.
+# Verify with:
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp '^https://github.com/stormlantern-dev/berthlight/\.github/workflows/release\.yml@refs/tags/v' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+    artifacts: checksum
+
+nfpms:
+  - id: packages
+    package_name: berthlight
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats: [deb, rpm, apk]
+    vendor: Stormlantern
+    homepage: https://github.com/stormlantern-dev/berthlight
+    maintainer: Dirk Louwers <dirk.louwers@stormlantern.nl>
+    description: Stable names for devcontainer dev servers, without published ports.
+    license: Apache-2.0
+    bindir: /usr/bin
+    recommends:
+      - git
+    suggests:
+      - podman
+      - docker
+
+homebrew_casks:
+  - name: berthlight
+    binaries: [berthlight]
+    description: Stable names for devcontainer dev servers, without published ports
+    homepage: https://github.com/stormlantern-dev/berthlight
+    license: Apache-2.0
+    repository:
+      owner: stormlantern-dev
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: berthlight release
+      email: noreply@stormlantern.nl
+    # The binary is not notarised; without this, macOS refuses to run it.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/berthlight"]
+          end
+
+scoops:
+  - name: berthlight
+    description: Stable names for devcontainer dev servers, without published ports.
+    homepage: https://github.com/stormlantern-dev/berthlight
+    license: Apache-2.0
+    repository:
+      owner: stormlantern-dev
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: berthlight release
+      email: noreply@stormlantern.nl
+
+aurs:
+  - name: berthlight-bin
+    description: Stable names for devcontainer dev servers, without published ports.
+    homepage: https://github.com/stormlantern-dev/berthlight
+    license: Apache-2.0
+    maintainers:
+      - Dirk Louwers <dirk.louwers@stormlantern.nl>
+    provides: [berthlight]
+    conflicts: [berthlight]
+    optdepends:
+      - "git: route names from worktrees"
+      - "podman: container runtime"
+      - "docker: container runtime"
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_url: ssh://aur@aur.archlinux.org/berthlight-bin.git
+    commit_author:
+      name: berthlight release
+      email: noreply@stormlantern.nl
+    package: |-
+      install -Dm755 "./berthlight" "${pkgdir}/usr/bin/berthlight"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/berthlight/LICENSE"
+
+# The proxy image. The CLI runs ghcr.io/stormlantern-dev/berthlight:<version>
+# by default (internal/cli), so the tag must be the bare version.
+dockers_v2:
+  - id: proxy
+    images:
+      - ghcr.io/stormlantern-dev/berthlight
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: Dockerfile.release
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.title: berthlight proxy
+      org.opencontainers.image.description: The berthlight proxy, routing *.localhost names to devcontainers.
+      org.opencontainers.image.source: https://github.com/stormlantern-dev/berthlight
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: Apache-2.0
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+release:
+  github:
+    owner: stormlantern-dev
+    name: berthlight
+  prerelease: auto
+  footer: |
+    Verify the checksums before use:
+
+    ```sh
+    cosign verify-blob --bundle checksums.txt.sigstore.json \
+      --certificate-identity 'https://github.com/stormlantern-dev/berthlight/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+    sha256sum --check --ignore-missing checksums.txt
+    ```
+
+    Or with GitHub's build provenance: `gh attestation verify <file> --repo stormlantern-dev/berthlight`.

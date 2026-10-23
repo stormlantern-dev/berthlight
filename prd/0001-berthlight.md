@@ -246,7 +246,8 @@ matches directory, description length).
 
 **R9 (MUST). Distribution.** Each tagged release publishes, through
 GoReleaser:
-- a Homebrew formula in the organisation's tap (macOS and Linux);
+- a Homebrew cask in the organisation's tap (macOS and Linux; GoReleaser
+  replaced formulas with casks in v2.10);
 - `.deb`, `.rpm` and `.apk` packages and archives on the GitHub release;
 - an AUR `-bin` package;
 - a Scoop manifest in the organisation's bucket;

@@ -35,15 +35,18 @@ jobs:
       - run: go run ./cmd/berthlight url
 
   integration:
-    name: integration (${{ matrix.runtime }})
+    # amd64 keeps the bare runtime name, which branch protection requires.
+    name: integration (${{ matrix.runtime }}${{ matrix.arch == 'arm64' && ', arm64' || '' }})
     strategy:
       fail-fast: false
       matrix:
         runtime: [docker, podman]
-    runs-on: ubuntu-latest
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     env:
       BERTHLIGHT_RUNTIME: ${{ matrix.runtime }}
       BERTHLIGHT_IMAGE: localhost/berthlight:test
+      BERTHLIGHT_REQUIRE_DEVCONTAINER: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +54,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the Dev Container CLI
+        run: npm install -g @devcontainers/cli@0.89.0
       - name: Install Podman
         if: matrix.runtime == 'podman'
         run: |
@@ -63,4 +71,33 @@ jobs:
       - name: Build the proxy image
         run: ${{ matrix.runtime }} build -t "$BERTHLIGHT_IMAGE" .
       - name: Integration tests
-        run: go test -tags integration -count=1 -v -timeout 10m ./test/integration
+        run: go test -tags integration -count=1 -v -timeout 15m ./test/integration
+
+  # R11: the release configuration builds on every pull request, images
+  # included, without publishing or signing anything.
+  release-snapshot:
+    name: release snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.3
+          args: check
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.3
+          args: release --snapshot --clean --skip=sign
+      - name: The packages install and run
+        run: |
+          sudo dpkg -i dist/berthlight_*_amd64.deb
+          berthlight version
+          docker run --rm --entrypoint /berthlight "$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/stormlantern-dev/berthlight | grep amd64 | head -1)" version
