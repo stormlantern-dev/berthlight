@@ -306,7 +306,11 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   each interactive command: copper bars, the letters of the name dropping in
   and bouncing, and at the waterline a little sailing boat passing a small
   octopus that surfaces, swipes a tentacle at it and misses, before the boat
-  moors at a quay with Amsterdam canal houses whose windows then light up. Animated where the Kitty graphics protocol
+  moors at a quay with Amsterdam canal houses whose windows then light up.
+  In terminals with the Kitty graphics protocol it is drawn Amiga-style at
+  four times the resolution, in 12-bit colour with ordered dithering:
+  copper bars per scanline, chrome letters, a moon, and reflections in the
+  water; over SSH, where each frame costs bandwidth, the chunky version. Animated where the Kitty graphics protocol
   is available (Kitty, Ghostty) while the command works, at most 4 seconds,
   and on its last frame at the command's first output, so it never holds a
   command up; the last frame in half blocks on other truecolor terminals;

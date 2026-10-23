@@ -348,7 +348,10 @@ func boatPos(s float64) (int, int) {
 
 // octopusTop is the row of the octopus's head's top at time s: deep under
 // water, surfacing, then sinking back until only its eyes show.
-func octopusTop(s float64) int {
+func octopusTop(s float64) int { return int(math.Round(octopusTopF(s))) }
+
+// octopusTopF is octopusTop without rounding, for smooth motion.
+func octopusTopF(s float64) float64 {
 	deep := float64(waterY + 3)              // fully under water
 	up := float64(waterY - len(octopusHead)) // head out, sitting on the waterline
 	peek := float64(waterY - 3)              // eyes just above the water
@@ -356,7 +359,7 @@ func octopusTop(s float64) int {
 	if s >= sinkFrom {
 		y = up + (peek-up)*smooth((s-sinkFrom)/(sinkTo-sinkFrom))
 	}
-	return int(math.Round(y))
+	return y
 }
 
 // tentacleTip is where the swiping tentacle's tip is, and whether it is
@@ -477,7 +480,10 @@ func letterSag(s float64) (sag, tilt int) {
 
 // letterOffset is how far above its resting row letter i is at time s: it
 // drops from above the scene, then bounces, each bounce lower.
-func letterOffset(s float64, i int) int {
+func letterOffset(s float64, i int) int { return int(math.Round(letterOffsetF(s, i))) }
+
+// letterOffsetF is letterOffset without rounding, for smooth motion.
+func letterOffsetF(s float64, i int) float64 {
 	const (
 		delay   = 0.08 // between letters
 		g       = 120  // pixels per second²
@@ -486,18 +492,18 @@ func letterOffset(s float64, i int) int {
 	)
 	t := s - float64(i)*delay
 	if t <= 0 {
-		return -int(height) - 2 // not in yet: above the scene
+		return -height - 2 // not in yet: above the scene
 	}
 	fall := math.Sqrt(2 * height / g)
 	if t < fall {
-		return -int(math.Round(height - g*t*t/2))
+		return -(height - g*t*t/2)
 	}
 	t -= fall
 	v := g * fall * damping
 	for v > 4 {
 		flight := 2 * v / g
 		if t < flight {
-			return -int(math.Round(v*t - g*t*t/2))
+			return -(v*t - g*t*t/2)
 		}
 		t -= flight
 		v *= damping
