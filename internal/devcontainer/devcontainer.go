@@ -272,7 +272,10 @@ func (e *editor) appPort(port int) error {
 }
 
 // publishes reports whether an appPort entry (8080, "8080",
-// "127.0.0.1:3000:8080", "8080/tcp") maps the container's port.
+// "127.0.0.1:3000:8080", "8080/tcp") maps the container's port. A range
+// ("8080-8089", "127.0.0.1:8080-8089:8080-8089") that holds the port
+// counts too: such a range is how projects ran several worktrees side by
+// side, which the berthlight route now does, so the whole entry goes.
 func publishes(lit hujson.Literal, port int) bool {
 	switch lit.Kind() {
 	case '0':
@@ -286,6 +289,11 @@ func publishes(lit hujson.Literal, port int) bool {
 		}
 		if k := strings.LastIndexByte(s, ':'); k >= 0 {
 			s = s[k+1:]
+		}
+		if lo, hi, ok := strings.Cut(s, "-"); ok {
+			l, err1 := strconv.Atoi(lo)
+			h, err2 := strconv.Atoi(hi)
+			return err1 == nil && err2 == nil && l <= port && port <= h
 		}
 		n, err := strconv.Atoi(s)
 		return err == nil && n == port
