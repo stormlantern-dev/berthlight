@@ -338,7 +338,8 @@ func TestWatch(t *testing.T) {
 	for _, n := range notes {
 		said = append(said, n[1])
 	}
-	want := []string{"gallery.localhost is up", "proxy down: proxy container berthlight does not exist", "shop.localhost is down: nothing listens on port 8080", "gallery.localhost is down: nothing listens on port 8080"}
+	// Notifications say what changed; the window says why.
+	want := []string{"gallery.localhost is up", "proxy down", "shop.localhost is down", "gallery.localhost is down"}
 	if !reflect.DeepEqual(said, want) {
 		t.Errorf("notifications:\n got %q\nwant %q", said, want)
 	}
