@@ -20,16 +20,17 @@ import (
 // The header (PRD 0001, R12) shows the scene at the top of a command's
 // output on a terminal:
 //   - animated in terminals with the Kitty graphics protocol (Kitty,
-//     Ghostty), in its Amiga version (the chunky one over SSH), for as
-//     long as the command is working and at most
-//     SceneLength; the first output, or the end of the command, puts it on
-//     its last frame, so it never holds a command up;
+//     Ghostty), locally and over SSH, in its Amiga version, for as long as
+//     the command is working and at most SceneLength; the first output, or
+//     the end of the command, puts it on its last frame, so it never holds a
+//     command up for more than the frame on its way to the terminal;
 //   - as the last frame in half-block characters on other truecolor
 //     terminals;
 //   - as one line of text elsewhere.
 //
 // Nothing at all without a terminal, in CI, with TERM=dumb or with
-// BERTHLIGHT_NO_ANIMATION.
+// BERTHLIGHT_NO_ANIMATION. BERTHLIGHT_SCENE=amiga or =c64 forces the
+// version the Kitty graphics protocol shows.
 
 // HeaderRows is the header's height in terminal rows.
 const HeaderRows = SceneH / 2
@@ -45,21 +46,60 @@ const (
 // frameInterval is the time between animation frames.
 const frameInterval = 40 * time.Millisecond
 
+// The Amiga scene falls back to the chunky one, for the rest of the run, as
+// soon as fewer than fallbackFrames frames have reached the terminal in a
+// fallbackAfter: the first one, or any later one. An Amiga frame is about
+// 19 KB and a chunky one about 5 KB, so 5 frames a second is a link of
+// about 95 KB/s (0.75 Mbit/s): below it the Amiga scene is a slide show of
+// under 5 frames a second, where the chunky one still gets about 19 of the
+// 25, and the last frame, which the command's output waits for, is a
+// quarter of the size.
+//
+// "Reached" is as far as berthlight can see: the write to the terminal has
+// returned and, over SSH where the socket can be seen, the link has carried
+// it (drain). Buffers it cannot see, such as the pty, take the first frames
+// at once and hide a slow link until they fill, which is why the check
+// keeps looking after the first second.
+const (
+	fallbackAfter  = time.Second
+	fallbackFrames = 5
+)
+
 // Header is a header on screen. A nil *Header is valid and does nothing.
+//
+// Frames reach the terminal through a writer goroutine and a one-slot
+// mailbox: the animation puts the scene time of the frame it wants in the
+// slot, replacing one the writer has not taken yet, and the writer draws
+// the latest. So at most one frame is ever on its way to the terminal, and
+// a slow terminal connection drops frames rather than queueing them.
 type Header struct {
 	w     io.Writer
 	mode  headerMode
 	id    uint32 // Kitty image id
 	start time.Time
-	// frame draws the scene at a time: the Amiga scene, or the chunky one
-	// over SSH, where each frame costs bandwidth.
-	frame func(time.Duration) *image.RGBA
 
-	mu      sync.Mutex
-	below   int // rows printed under the header by Print
-	stopped bool
-	stop    chan struct{}
-	done    chan struct{}
+	// mu serializes writes to w (frames and Print) and guards below.
+	mu    sync.Mutex
+	below int // rows printed under the header by Print
+
+	// Owned by the writer goroutine.
+	hi     bool                      // drawing the Amiga scene, not the chunky one
+	auto   bool                      // may fall back to the chunky scene on a slow link
+	drawn  int                       // frames written
+	recent [fallbackFrames]time.Time // when the last frames were written
+	// backlog reports the bytes on their way to the terminal, over SSH
+	// where that can be seen (link.go); nil elsewhere.
+	backlog func() (int, bool)
+
+	// box guards the mailbox: the scene time of the next frame to draw.
+	box     sync.Mutex
+	next    time.Duration
+	pending bool
+	last    bool // next is the last frame; later ones are ignored
+	wake    chan struct{}
+
+	stop chan struct{} // closed by Stop: the animation ends
+	done chan struct{} // closed when the last frame is drawn
 }
 
 // StartHeader shows the header on w if w is a terminal it may draw on, and
@@ -71,40 +111,69 @@ func StartHeader(w io.Writer, version string) *Header {
 		return nil
 	}
 	cols, rows, err := xterm.GetSize(int(f.Fd()))
-	h := &Header{w: f, start: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	mode := modeText
 	kind := DetectKind(os.Getenv)
 	switch {
 	case err != nil || cols < SceneW:
-		h.mode = modeText
 	case (kind == Kitty || kind == Ghostty) && os.Getenv("TMUX") == "" && rows > HeaderRows+2:
-		h.mode = modeKitty
+		mode = modeKitty
 	case truecolor(kind):
-		h.mode = modeHalfBlocks
-	default:
-		h.mode = modeText
+		mode = modeHalfBlocks
 	}
-	switch h.mode {
+	switch mode {
 	case modeText:
 		fmt.Fprintln(f, textBanner(version))
-		h.stopped = true
-		close(h.done)
 	case modeHalfBlocks:
 		fmt.Fprint(f, HalfBlocks(Frame(SceneLength)))
-		h.stopped = true
-		close(h.done)
 	case modeKitty:
-		h.id = rand.Uint32N(1<<31-2) + 1
-		h.frame = FrameHi
+		hi, auto := sceneChoice(os.Getenv("BERTHLIGHT_SCENE"))
+		var backlog func() (int, bool)
 		if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
-			h.frame = Frame
+			// Over SSH the Amiga scene needs a view of the link; without
+			// one, the chunky scene, which needs a quarter of it.
+			if backlog = sshBacklog(os.Getenv); backlog == nil && auto {
+				hi = false
+			}
 		}
-		// Make room, then draw the first frame into it.
+		// Make room, then animate in it.
 		fmt.Fprint(f, strings.Repeat("\n", HeaderRows))
-		h.mu.Lock()
-		h.draw(h.frame(0))
-		h.mu.Unlock()
-		go h.animate()
+		return startKitty(f, hi, auto, backlog)
 	}
+	// Already on its last frame.
+	h := &Header{w: f, mode: mode, last: true, done: make(chan struct{})}
+	close(h.done)
+	return h
+}
+
+// sceneChoice reads BERTHLIGHT_SCENE: whether to draw the Amiga scene, and
+// whether it may fall back to the chunky one on a slow link. The Amiga
+// scene is the default, also over SSH.
+func sceneChoice(v string) (hi, auto bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "amiga":
+		return true, false
+	case "c64":
+		return false, false
+	}
+	return true, true
+}
+
+// startKitty starts animating the scene in the HeaderRows rows above the
+// cursor on w: the Amiga one if hi, falling back to the chunky one on a
+// slow link if auto. backlog, if not nil, reports the bytes on their way
+// to the terminal.
+func startKitty(w io.Writer, hi, auto bool, backlog func() (int, bool)) *Header {
+	h := &Header{
+		w: w, mode: modeKitty, id: rand.Uint32N(1<<31-2) + 1, start: time.Now(),
+		hi: hi, auto: hi && auto, backlog: backlog,
+		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	for i := range h.recent {
+		h.recent[i] = h.start
+	}
+	h.post(0, false)
+	go h.write()
+	go h.animate()
 	return h
 }
 
@@ -124,8 +193,27 @@ func textBanner(version string) string {
 	return "\x1b[1;36m" + s + "\x1b[0m"
 }
 
+// post puts the frame at scene time t in the mailbox, replacing one not yet
+// drawn. last marks the last frame: after it, posts are ignored. It never
+// waits for the terminal. It reports whether the frame was taken.
+func (h *Header) post(t time.Duration, last bool) bool {
+	h.box.Lock()
+	if h.last {
+		h.box.Unlock()
+		return false
+	}
+	h.next, h.pending, h.last = t, true, last
+	h.box.Unlock()
+	select {
+	case h.wake <- struct{}{}:
+	default: // the writer has been woken already
+	}
+	return true
+}
+
+// animate asks for a frame every frameInterval until SceneLength, or until
+// Stop.
 func (h *Header) animate() {
-	defer close(h.done)
 	t := time.NewTicker(frameInterval)
 	defer t.Stop()
 	for {
@@ -134,15 +222,80 @@ func (h *Header) animate() {
 			return
 		case <-t.C:
 		}
-		elapsed := time.Since(h.start)
-		h.mu.Lock()
-		if !h.stopped {
-			h.draw(h.frame(elapsed))
-		}
-		h.mu.Unlock()
-		if elapsed >= SceneLength {
+		if elapsed := time.Since(h.start); elapsed < SceneLength {
+			h.post(elapsed, false)
+		} else {
+			h.post(SceneLength, true)
 			return
 		}
+	}
+}
+
+// write draws the frames from the mailbox, the latest each time, until it
+// has drawn the last.
+func (h *Header) write() {
+	defer close(h.done)
+	for range h.wake {
+		h.box.Lock()
+		t, ok, last := h.next, h.pending, h.last
+		h.pending = false
+		h.box.Unlock()
+		if !ok {
+			continue
+		}
+		img := Frame(t)
+		if h.hi {
+			img = FrameHi(t)
+		}
+		h.mu.Lock()
+		h.draw(img)
+		h.mu.Unlock()
+		if last {
+			return
+		}
+		h.drain()
+		h.checkLink(time.Now())
+	}
+}
+
+// Over SSH, the writer draws the next frame once at most linkSlack bytes
+// are still on their way to the terminal: less than an Amiga frame, so the
+// command's output never queues behind more than about two frames. It
+// waits at most drainLimit for that, and not at all once the last frame is
+// asked for, which then queues behind the backlog as the output would.
+const (
+	linkSlack  = 16 << 10
+	drainLimit = time.Second
+)
+
+// drain waits for the link to carry what is on its way, as far as it can
+// be seen.
+func (h *Header) drain() {
+	if h.backlog == nil {
+		return
+	}
+	for deadline := time.Now().Add(drainLimit); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if n, ok := h.backlog(); !ok || n <= linkSlack {
+			return
+		}
+		h.box.Lock()
+		last := h.last
+		h.box.Unlock()
+		if last {
+			return
+		}
+	}
+}
+
+// checkLink notes a frame written at now, and falls back to the chunky
+// scene if fewer than fallbackFrames frames were written in the
+// fallbackAfter up to now.
+func (h *Header) checkLink(now time.Time) {
+	h.drawn++
+	h.recent[(h.drawn-1)%fallbackFrames] = now
+	// The oldest of the last fallbackFrames frames, or the start.
+	if oldest := h.recent[h.drawn%fallbackFrames]; h.hi && h.auto && now.Sub(oldest) >= fallbackAfter {
+		h.hi = false
 	}
 }
 
@@ -154,21 +307,16 @@ func (h *Header) draw(img *image.RGBA) {
 	fmt.Fprintf(h.w, "\x1b[?2026h\x1b7\x1b[%dA\r%s\x1b8\x1b[?2026l", up, KittyImage(img, h.id))
 }
 
-// Stop puts the header on its last frame and stops animating. It returns
-// at once if the header is already still.
+// Stop puts the header on its last frame and stops animating. It waits for
+// the frame on its way to the terminal, if any, and the last frame, so at
+// most two frames; and returns at once if the header is already still.
 func (h *Header) Stop() {
 	if h == nil {
 		return
 	}
-	h.mu.Lock()
-	if h.stopped {
-		h.mu.Unlock()
-		return
+	if h.post(SceneLength, true) {
+		close(h.stop)
 	}
-	h.stopped = true
-	h.draw(h.frame(SceneLength))
-	h.mu.Unlock()
-	close(h.stop)
 	<-h.done
 }
 
