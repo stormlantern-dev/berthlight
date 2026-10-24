@@ -120,16 +120,42 @@ def "main setup" [--dir: path] {
   print $"Ready in ($dir). Next: ./scripts/demo.nu steps"
 }
 
-def dc-up [folder: path, extra: list<string>] {
+# devcontainer up for a folder, with the runtime berthlight uses. It prints
+# one line: where the dev server answers, or why it did not start. The
+# Dev Container CLI's own log, which is long and has harmless errors in it
+# (busybox has no /etc/os-release), only with --verbose or on failure.
+def dc-up [folder: path, extra: list<string>, verbose: bool] {
   let f = ($folder | path expand)
-  ^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra
+  let name = ($f | path basename)
+  if $verbose {
+    ^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra
+    return
+  }
+  print -n $"starting ($name)… "
+  let r = (^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra | complete)
+  let log = $"($r.stdout)\n($r.stderr)"
+  let outcome = ($r.stdout | lines | where ($it | str starts-with '{"outcome"') | last 1 | each { from json } | get -o 0)
+  if $r.exit_code == 0 and ($outcome.outcome? == "success") {
+    let wired = (open --raw ($f | path join ".devcontainer" "devcontainer.json") | str contains "berthlight")
+    let url = if $wired { ^berthlight url -C $f | str trim } else { $"http://localhost:($PORT)" }
+    print $"(ansi green)up(ansi reset) at ($url)"
+    return
+  }
+  let why = if ($log =~ '(?i)address already in use|port is already allocated|bind: address') {
+    $"port ($PORT) is already in use"
+  } else {
+    $outcome.message? | default "see the log above"
+  }
+  if not ($log =~ '(?i)address already in use|port is already allocated|bind: address') { print ""; print $log }
+  print $"(ansi red)failed(ansi reset): ($why)"
+  exit 1
 }
 
 # devcontainer up for a folder, with the runtime berthlight uses.
-def "main up" [folder: path] { dc-up $folder [] }
+def "main up" [folder: path, --verbose (-v)] { dc-up $folder [] $verbose }
 
 # The same, replacing the container: after changing devcontainer.json.
-def "main rebuild" [folder: path] { dc-up $folder [--remove-existing-container] }
+def "main rebuild" [folder: path, --verbose (-v)] { dc-up $folder [--remove-existing-container] $verbose }
 
 # Stop the devcontainer of a folder, as if its dev server went down.
 def "main stop" [folder: path] {
