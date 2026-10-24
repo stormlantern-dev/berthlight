@@ -297,35 +297,22 @@ once the CLI is stable.
 installers) on every release and snapshot; CI checks them against winget's
 schemas and with `winget validate`. On a release, with the repository
 variable `WINGET_ENABLED=true`, a Windows job installs the release from its
-manifests with `winget install --manifest` and runs it, and then a job of its
-own commits the manifests to `stormlantern-dev/winget-pkgs`, the
-organisation's fork, and opens the pull request upstream. Separate jobs keep
-a failed submission from failing the release and keep the pull request token
-out of the job that builds. Pre-releases are not submitted.
+manifests with `winget install --manifest` and runs it. A second job commits
+the manifests with the release App to a branch of `stormlantern-dev/winget-pkgs`,
+the organisation's fork. Its summary links the upstream pull request with title
+and body (winget-pkgs' checklist) filled in. These are separate jobs, so a
+winget failure cannot fail the release. Pre-releases are not submitted.
 
-Opening that pull request takes a user's token; this is the one place the
-release needs a stored bearer credential. The fork is written with the
-release App, as the tap and the bucket are. But an App's installation
-tokens, and the user tokens it issues, only reach accounts where it is
-installed, and only Microsoft can install an App on `microsoft/winget-pkgs`.
-Fine-grained personal tokens fail on the pull request call as well
-(russellbanks/Komac#310). That is why komac, wingetcreate, winget-releaser
-and GoReleaser all take a classic token with the `public_repo` scope. To
-contain it:
-- it belongs to a machine user outside the organisation that owns nothing,
-  so `public_repo` lets it open pull requests and write to nothing of ours;
-- the release uses it for one API call, to open the pull request; the App
-  token does the writing;
-- it lives in Secret Manager in `stormlantern-release`, not in GitHub,
-  readable through Workload Identity Federation by `release.yml` on a `v*`
-  tag and `verify-release-credentials.yml` on `main` only
-  (`WINGET_PR_TOKEN_SECRET`, `scripts/gcp-release.nu winget-token`);
-- *Verify release credentials* fails if it has any scope besides
-  `public_repo` or its user is in the organisation.
-
-Without `WINGET_PR_TOKEN_SECRET`, the release still commits the branch and
-links the page that opens the pull request in one click, so nothing is
-stored and a person opens the pull request.
+A person opens that pull request by hand, on purpose. Opening a pull request
+on `microsoft/winget-pkgs` from the workflow takes a long-lived user token,
+and this project keeps none. An App's installation tokens, and the user
+tokens it issues, only reach accounts where it is installed, and only
+Microsoft can install an App there. Fine-grained personal tokens fail on
+that call too (russellbanks/Komac#310). That leaves a classic `public_repo`
+token, which is what komac, wingetcreate, winget-releaser and GoReleaser
+use. The cost is one click per release. The first pull request also needs
+the operator's signature on Microsoft's CLA: they sign once, as themselves,
+when the CLA bot asks on that pull request.
 
 **R11 (MUST). Continuous integration.**
 - Linux, amd64 and arm64: unit tests and the integration tests (R1–R7) against

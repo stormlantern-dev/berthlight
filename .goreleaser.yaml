@@ -109,15 +109,12 @@ scoops:
 # dist/winget, on every release and every snapshot; CI validates them
 # against the winget schemas (.github/actions/winget-schema) and with
 # `winget validate`. The winget jobs in release.yml test them with
-# `winget install` and submit them to microsoft/winget-pkgs, in jobs of
-# their own:
-#
-# - a pull request upstream needs a user's token, because an App
-#   installation token only reaches repositories the App is installed on;
-#   that token stays out of the GoReleaser job, which runs builds;
-# - a failed submission then cannot fail this job, which signs and attests
-#   the release after GoReleaser (GoReleaser exits non-zero when a
-#   publisher fails, after the others ran).
+# `winget install` and push them to the organisation's fork, and a person
+# opens the pull request upstream: GoReleaser would need a long-lived user
+# token for that, which this project does not keep (PRD 0001, R10). Jobs of
+# their own also mean a winget failure cannot fail this job, which signs
+# and attests the release after GoReleaser (GoReleaser exits non-zero when
+# a publisher fails, after the others ran).
 #
 # So skip_upload is always true, and repository only names the fork the job
 # pushes to. The job runs once WINGET_ENABLED=true; see release.yml.

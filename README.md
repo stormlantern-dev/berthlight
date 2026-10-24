@@ -37,8 +37,9 @@ winget is on its way: `winget install Stormlantern.Berthlight` works once
 the package is accepted in
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Until then,
 use Scoop. Releases test the manifests with `winget validate` and
-`winget install` before submitting them; the PRD (R10) says how they are
-submitted and which credentials that takes.
+`winget install` and push them to the organisation's fork. A person then
+opens the pull request upstream, on purpose: automating it would take a
+long-lived user token, which this project does not keep (PRD, R10).
 
 ## Use
 

@@ -12,10 +12,9 @@
 #
 # winget: WINGET_ENABLED=true installs the release with winget and commits
 # the manifests to the organisation's fork of microsoft/winget-pkgs, with
-# the same App. Opening the pull request upstream takes a user's token (see
-# .github/actions/winget-pr-token), read from Secret Manager when
-# WINGET_PR_TOKEN_SECRET names it; without it the job stops at the branch
-# and links the page to open the pull request from by hand.
+# the same App. A person opens the pull request upstream, from the link in
+# the job summary: doing that from here would take a long-lived user token
+# (PRD 0001, R10), which this project does not keep.
 name: Release
 
 on:
@@ -238,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # WIF for the App key and the pull request token
+      id-token: write # WIF for the App key
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -267,21 +266,13 @@ jobs:
           workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
           kms-key-version: ${{ vars.TAP_KMS_KEY_VERSION }}
           repositories: winget-pkgs
-      - name: Read the pull request token
-        id: pr_token
-        if: vars.WINGET_PR_TOKEN_SECRET != ''
-        uses: ./.github/actions/winget-pr-token
-        with:
-          workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
-          secret-version: ${{ vars.WINGET_PR_TOKEN_SECRET }}
-      - name: Submit to microsoft/winget-pkgs
+      - name: Push the branch for microsoft/winget-pkgs
         uses: ./.github/actions/winget-submit
         with:
           manifests: ${{ steps.dir.outputs.dir }}
           identifier: ${{ steps.manifests.outputs.identifier }}
           version: ${{ steps.manifests.outputs.version }}
           app-token: ${{ steps.app_token.outputs.token }}
-          pr-token: ${{ steps.pr_token.outputs.token }}
           read-token: ${{ github.token }}
       - name: Revoke the App token
         if: always()
