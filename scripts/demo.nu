@@ -56,8 +56,7 @@ httpd -p 5173 -h /tmp/www
 '##
 
 def devcontainer-json [name: string] {
-  $"// The ($name) development container. Its dev server answers on port
-// ($PORT), published on the host: while it runs, no other project can use it.
+  $"// The ($name) development container, with its dev server on port ($PORT).
 {
   \"name\": \"($name)\",
   \"image\": \"($BUSYBOX)\",
@@ -110,12 +109,20 @@ def "main setup" [--dir: path] {
   make-project $dir "gallery"
   for name in [webshop gallery] { agent-settings $dir ($dir | path join $name) }
   # The webshop's agent gets the skill now; the gallery's in step 4, live.
-  do { cd ($dir | path join "webshop"); ^berthlight --no-header skill install --project | ignore }
+  do { cd ($dir | path join "webshop"); ^berthlight --no-header skill install --agent claude --project | ignore }
   print $"pulling ($BUSYBOX)"
   ^(runtime) pull -q $BUSYBOX | ignore
-  print "starting and stopping the proxy once, to pull its image"
-  ^berthlight --no-header up
-  ^berthlight --no-header down
+  # Start the proxy once, to pull its image; stop it again only if it was
+  # not already running for other projects.
+  let proxy = ($env.BERTHLIGHT_PROXY_NAME? | default "berthlight")
+  let running = (^(runtime) ps -q --filter $"name=^($proxy)$" | str trim | is-not-empty)
+  if $running {
+    print "the proxy is already running; leaving it as it is"
+  } else {
+    print "starting and stopping the proxy once, to pull its image"
+    ^berthlight --no-header up
+    ^berthlight --no-header down
+  }
   print ""
   print $"Ready in ($dir). Next: ./scripts/demo.nu steps"
 }
@@ -217,7 +224,7 @@ def "main steps" [--dir: path] {
       berthlight status
 
  4. The gallery, by an agent: in ($dir)/gallery, in Claude Code:
-      berthlight skill install --project
+      berthlight skill install --agent claude --project
       claude 'Wire this project to berthlight, project name gallery.'
       ($d) rebuild .           # http://gallery.localhost:7480, next to the shop
 

@@ -215,7 +215,7 @@ func watchWith(ctx context.Context, ticks <-chan time.Time, check func(context.C
 			case !term.TTY():
 				fmt.Fprintf(w, "%s %s\n", now().Format("15:04:05"), ch)
 			case prev != nil: // notify on changes, not on the first look
-				term.Notify("berthlight", ch)
+				term.Notify("berthlight", headline(ch))
 			}
 		}
 		prev = &rep
@@ -290,6 +290,15 @@ func changes(prev *status.Report, rep status.Report, c Config) []string {
 		}
 	}
 	return out
+}
+
+// headline is a change without its detail, for a desktop notification:
+// "shop.localhost is down". The watch window shows the detail.
+func headline(change string) string {
+	if i := strings.Index(change, ": "); i >= 0 {
+		return change[:i]
+	}
+	return change
 }
 
 func routeLine(host string, rs status.RouteStatus) string {
