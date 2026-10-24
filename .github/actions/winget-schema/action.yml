@@ -1,0 +1,71 @@
+name: Check the winget manifests against the schemas
+description: >
+  Validate the winget manifests GoReleaser writes to dist/winget against
+  winget's published JSON schemas, on any runner with Python. `winget
+  validate` itself needs Windows; CI runs that too, where it can.
+
+# The schema version is the one GoReleaser writes (ManifestVersion); the
+# check fails if they disagree, so a GoReleaser upgrade that moves to a new
+# schema version shows up here rather than in microsoft/winget-pkgs.
+
+inputs:
+  manifests:
+    description: Directory holding one package version's manifests.
+    required: true
+
+outputs:
+  identifier:
+    description: PackageIdentifier of the manifests.
+    value: ${{ steps.check.outputs.identifier }}
+  version:
+    description: PackageVersion of the manifests.
+    value: ${{ steps.check.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate
+      id: check
+      shell: bash
+      env:
+        DIR: ${{ inputs.manifests }}
+        MANIFEST_VERSION: 1.12.0
+        # microsoft/winget-cli master, 2026-10-24.
+        SCHEMAS: https://raw.githubusercontent.com/microsoft/winget-cli/5d302e449b63ca1534bf4b7c871f048ad07d5dca/schemas/JSON/manifests
+        CHECK_JSONSCHEMA: check-jsonschema==0.38.2
+      run: |
+        set -euo pipefail
+        venv="${RUNNER_TEMP}/winget-schema"
+        python3 -m venv "$venv"
+        "$venv/bin/pip" install -q "$CHECK_JSONSCHEMA"
+        for t in version installer defaultLocale locale; do
+          curl -fsSL --retry 3 -o "$venv/$t.json" "$SCHEMAS/v${MANIFEST_VERSION}/manifest.${t}.${MANIFEST_VERSION}.json"
+        done
+
+        # The fields this needs are plain top-level scalars.
+        field() { sed -n "s/^$2: *//p" "$1" | head -1 | tr -d '"'; }
+
+        shopt -s nullglob
+        files=("$DIR"/*.yaml)
+        test "${#files[@]}" -ge 3 || { echo "::error::expected at least 3 manifests in $DIR, found ${#files[@]}"; exit 1; }
+        id=$(field "${files[0]}" PackageIdentifier)
+        version=$(field "${files[0]}" PackageVersion)
+        for f in "${files[@]}"; do
+          type=$(field "$f" ManifestType)
+          test "$(field "$f" ManifestVersion)" = "$MANIFEST_VERSION" || { echo "::error file=$f::ManifestVersion is not $MANIFEST_VERSION"; exit 1; }
+          test "$(field "$f" PackageIdentifier)" = "$id" || { echo "::error file=$f::PackageIdentifier differs"; exit 1; }
+          test "$(field "$f" PackageVersion)" = "$version" || { echo "::error file=$f::PackageVersion differs"; exit 1; }
+          test -f "$venv/$type.json" || { echo "::error file=$f::unknown ManifestType $type"; exit 1; }
+          "$venv/bin/check-jsonschema" --schemafile "$venv/$type.json" "$f"
+        done
+
+        # winget-pkgs keeps a version in manifests/<first letter>/<id as path>/<version>.
+        first=$(printf '%s' "${id:0:1}" | tr '[:upper:]' '[:lower:]')
+        want="manifests/${first}/${id//.//}/${version}"
+        case "$(cd "$DIR" && pwd)" in
+          */"$want") ;;
+          *) echo "::error::$DIR is not at $want"; exit 1 ;;
+        esac
+        echo "identifier=${id}" >> "$GITHUB_OUTPUT"
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "valid: ${id} ${version} (${#files[@]} manifests, schema ${MANIFEST_VERSION})"
