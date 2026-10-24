@@ -10,6 +10,7 @@
 #   ./scripts/demo.nu stop <folder>    # stop a folder's devcontainer
 #   ./scripts/demo.nu steps            # the demo, step by step
 #   ./scripts/demo.nu privileges       # what the proxy may do
+#   ./scripts/demo.nu agent            # Claude Code at work, step 7
 #   ./scripts/demo.nu teardown         # remove everything the demo made
 #
 # Needs berthlight, git, the Dev Container CLI (devcontainer) and Docker or
@@ -17,7 +18,7 @@
 
 const BUSYBOX = "docker.io/library/busybox:1.37"
 const PORT = 5173 # the dev servers' port, as Vite's
-const ROUTES = ["shop", "shop-fix-login", "gallery"]
+const ROUTES = ["shop", "shop-fix-login", "shop-dark", "shop-retro", "shop-minimal", "gallery"]
 
 def default-dir [] { $env.HOME | path join "berthlight-demo" }
 
@@ -28,27 +29,29 @@ def runtime [] {
 }
 
 def main [] {
-  print "usage: demo.nu <setup|up <folder>|rebuild <folder>|stop <folder>|steps|privileges|teardown> [--dir <dir>]"
+  print "usage: demo.nu <setup|up <folder>|rebuild <folder>|stop <folder>|steps|agent|privileges|teardown> [--dir <dir>]"
 }
 
-# The dev server: busybox httpd with a page in the project's colour, saying
-# which folder (project or worktree) it runs in, and the name it was
-# reached at.
+# The landing page, a plain file in the project: __NAME__ becomes the
+# folder (project or worktree) it runs in, __HUE__ and __HUE2__ the
+# project's colours. It shows the name it was reached at.
+const PAGE = r##'<!doctype html><meta charset=utf-8><title>__NAME__</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;font:500 22px system-ui,sans-serif;color:#fff;
+background:linear-gradient(135deg,hsl(__HUE__ 65% 42%),hsl(__HUE2__ 70% 28%))}
+h1{font-size:72px;margin:0 0 8px}p{margin:6px 0;opacity:.9}code{background:#0004;padding:4px 12px;border-radius:8px}
+</style>
+<div><h1>__NAME__</h1><p>a dev server in its own devcontainer, on port 5173</p>
+<p>you reached it at <code id=h></code></p></div>
+<script>document.getElementById('h').textContent=location.host</script>
+'##
+
+# The dev server: busybox httpd serving index.html, filled in.
 const SERVE = r##'#!/bin/sh
 mkdir -p /tmp/www
 name=$(basename "$PWD")
 hue=$(( $(echo "${name%%-*}" | cksum | cut -d' ' -f1) % 360 ))
-cat > /tmp/www/index.html <<EOF
-<!doctype html><meta charset=utf-8><title>$name</title>
-<style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;font:500 22px system-ui,sans-serif;color:#fff;
-background:linear-gradient(135deg,hsl($hue 65% 42%),hsl($(( (hue+50) % 360 )) 70% 28%))}
-h1{font-size:72px;margin:0 0 8px}p{margin:6px 0;opacity:.9}code{background:#0004;padding:4px 12px;border-radius:8px}
-</style>
-<div><h1>$name</h1><p>a dev server in its own devcontainer, on port 5173</p>
-<p>you reached it at <code id=h></code></p></div>
-<script>document.getElementById('h').textContent=location.host</script>
-EOF
+sed -e "s/__NAME__/$name/g" -e "s/__HUE__/$hue/g" -e "s/__HUE2__/$(( (hue+50) % 360 ))/g" index.html > /tmp/www/index.html
 httpd -p 5173 -h /tmp/www
 '##
 
@@ -69,6 +72,7 @@ def make-project [dir: path, name: string] {
   mkdir ($p | path join ".devcontainer")
   devcontainer-json $name | save -f ($p | path join ".devcontainer" "devcontainer.json")
   $SERVE | save -f ($p | path join ".devcontainer" "serve.sh")
+  $PAGE | save -f ($p | path join "index.html")
   $"# ($name)\n\nA demo project for berthlight.\n" | save -f ($p | path join "README.md")
   ^git -C $p init -q -b main
   # Its own identity, so commits work during the demo on any machine.
@@ -77,6 +81,20 @@ def make-project [dir: path, name: string] {
   ^git -C $p add -A
   ^git -C $p commit -q -m $"A devcontainer with a dev server on port ($PORT)"
   print $"created ($p)"
+}
+
+# Let Claude Code work through the demo without asking at each step: the
+# commands the demo needs, and edits in the demo folder, where the agent
+# makes its worktrees. Not committed, so worktrees do not inherit it.
+def agent-settings [dir: path, p: path] {
+  mkdir ($p | path join ".claude")
+  {
+    permissions: {
+      allow: ["Bash(git:*)" "Bash(devcontainer:*)" "Bash(berthlight:*)" "Bash(curl:*)" "Bash(ls:*)" "Bash(cat:*)" "Edit" "Write"]
+      additionalDirectories: [$dir]
+    }
+  } | to json | save -f ($p | path join ".claude" "settings.local.json")
+  "/.claude/\n" | save -a ($p | path join ".git" "info" "exclude")
 }
 
 # Create the demo projects and pull the images, so nothing waits on the
@@ -90,6 +108,9 @@ def "main setup" [--dir: path] {
   mkdir $dir
   make-project $dir "webshop"
   make-project $dir "gallery"
+  for name in [webshop gallery] { agent-settings $dir ($dir | path join $name) }
+  # The webshop's agent gets the skill now; the gallery's in step 4, live.
+  do { cd ($dir | path join "webshop"); ^berthlight --no-header skill install --project | ignore }
   print $"pulling ($BUSYBOX)"
   ^(runtime) pull -q $BUSYBOX | ignore
   print "starting and stopping the proxy once, to pull its image"
@@ -127,6 +148,17 @@ def "main privileges" [] {
   print $"runs as:                ($i.0)"
   print $"read-only root:         ($i.1)"
   print $"effective capabilities: ($cap)(if ($cap | str replace -a '0' '' | is-empty) { '  (none)' } else { '' })"
+}
+
+# The task for the agent in step 6: three variants of the webshop, each in
+# its own worktree and devcontainer, side by side.
+const AGENT_TASK = "Maak drie varianten van de landingspagina van deze webshop: dark, retro en minimal. Geef elke variant een eigen git worktree naast deze map (../webshop-dark, ../webshop-retro, ../webshop-minimal) en pas daar index.html aan, zodat de pagina echt bij de variant past. Commit in elke worktree. Start elke devcontainer met devcontainer up --workspace-folder <map>, controleer met berthlight dat alle drie antwoorden, en geef me tot slot de drie URLs."
+
+# Start Claude Code in the webshop with the task: edits accepted, the
+# demo's commands allowed by the settings setup wrote.
+def "main agent" [--dir: path] {
+  cd (($dir | default (default-dir)) | path join "webshop")
+  ^claude --permission-mode acceptEdits $AGENT_TASK
 }
 
 # The machine's address on the local network, for showing the proxy is not
@@ -174,11 +206,15 @@ def "main steps" [--dir: path] {
       ($d) stop ../webshop-fix-login  # a notification: down
       ($d) up ../webshop-fix-login    # and up again
 
- 7. Least privilege, and nothing on the network.
+ 7. An agent at work: three variants, three worktrees, side by side.
+      ($d) agent                     # Claude Code, with the task
+      berthlight status              # shop-dark, shop-retro, shop-minimal
+
+ 8. Least privilege, and nothing on the network.
       ($d) privileges   # user 65532, read-only, no capabilities
       curl http://(lan-ip):7480   # refused: loopback only
 
- 8. Afterwards: ./scripts/demo.nu teardown
+ 9. Afterwards: ./scripts/demo.nu teardown
 "
 }
 
