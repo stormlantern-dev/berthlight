@@ -247,6 +247,7 @@ Commands:
   url [--copy]                 print the URL of the current worktree's dev server
   cert --dns <provider>        get or renew a publicly trusted wildcard certificate for
                                your own base domain (DNS-01); then the proxy serves HTTPS
+                               (the first run, which creates the ACME account, needs --accept-tos)
   cert --install-timer         renew daily (systemd user timer, or launchd on macOS)
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
   demo                         play the header animation

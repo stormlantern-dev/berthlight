@@ -73,8 +73,12 @@ challenge, from Let's Encrypt by default (in nushell):
 ```nu
 $env.BERTHLIGHT_BASE = "dev.example.com,localhost"   # in your config.nu
 berthlight down; berthlight up                       # the proxy accepts the new base
-berthlight cert --dns gcloud --install-timer         # get it, and renew it daily
+berthlight cert --dns gcloud --accept-tos --install-timer   # get it, and renew it daily
 ```
+
+The first run creates an ACME account with the CA, which means agreeing to
+its terms of service: without `--accept-tos` it stops and shows where they
+are. Later runs, and the renewal timer, use that account and need no flag.
 
 `berthlight cert` runs on the host and is the only part that sees your DNS
 credentials. It reads them as [lego](https://go-acme.github.io/lego/dns/)

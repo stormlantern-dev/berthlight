@@ -38,6 +38,7 @@ func cmdCert(args []string, stdout, stderr io.Writer) error {
 	email := fs.String("email", "", "contact address for the ACME account, optional ($BERTHLIGHT_ACME_EMAIL)")
 	resolvers := fs.String("resolvers", "", "DNS servers to check the challenge on, host:port, comma-separated ($BERTHLIGHT_DNS_RESOLVERS; default the system's and the zone's own)")
 	within := fs.Duration("renew-within", 0, "renew when the certificate expires within this time (default: when a third of its lifetime is left)")
+	tos := fs.Bool("accept-tos", false, "agree to the CA's terms of service; needed once, when the ACME account is created")
 	timer := fs.Bool("install-timer", false, "also install a daily renewal: a systemd user timer, or a launchd agent on macOS")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return errUsage
@@ -85,11 +86,16 @@ func cmdCert(args []string, stdout, stderr io.Writer) error {
 		AccountDir:  c.ACMEDir,
 		StateDir:    c.StateDir,
 		RenewWithin: *within,
+		AcceptTOS:   *tos,
 		Log:         slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	res, err := acme.Ensure(ctx, opts)
+	var terms *acme.TermsError
+	if errors.As(err, &terms) {
+		return fmt.Errorf("%w\nRead them, then run this again with --accept-tos. Later runs, and the renewal timer, use the account and need no flag", err)
+	}
 	if err != nil {
 		return err
 	}

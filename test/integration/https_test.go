@@ -24,6 +24,7 @@ import (
 
 	"stormlantern.nl/berthlight/internal/certs"
 	"stormlantern.nl/berthlight/internal/certs/certstest"
+	"stormlantern.nl/berthlight/internal/cli"
 )
 
 // pebble is a running Pebble, Let's Encrypt's test ACME server, with
@@ -195,7 +196,12 @@ func TestHTTPS(t *testing.T) {
 	e.waitBody(main+"."+base, "hello-from-main", 15*time.Second)
 
 	certArgs := []string{"cert", "--dns", "exec", "--server", peb.directory, "--resolvers", peb.dns}
-	if out := e.cli(certArgs...); !strings.Contains(out, "obtained a certificate for *."+base) {
+	// A new ACME account needs the CA's terms accepted, explicitly.
+	var refused bytes.Buffer
+	if code := cli.Run(certArgs, &refused, &refused); code != 1 || !strings.Contains(refused.String(), "--accept-tos") || !strings.Contains(refused.String(), "terms of service") {
+		t.Fatalf("cert without --accept-tos: exit %d\n%s", code, refused.String())
+	}
+	if out := e.cli(append(certArgs, "--accept-tos")...); !strings.Contains(out, "obtained a certificate for *."+base) {
 		t.Fatalf("cert: %s", out)
 	}
 	serial := e.waitHTTPS(main+"."+base, "hello-from-main", peb.roots, nil)
@@ -213,7 +219,8 @@ func TestHTTPS(t *testing.T) {
 		t.Errorf("ls lacks the https URL:\n%s", out)
 	}
 
-	// Not due: kept. Due: renewed through DNS-01 again, and served.
+	// Not due: kept. Due: renewed through DNS-01 again, and served. The
+	// account exists now, so neither needs --accept-tos, as for the timer.
 	if out := e.cli(certArgs...); !strings.Contains(out, "is valid until") {
 		t.Errorf("cert when not due: %s", out)
 	}

@@ -109,6 +109,8 @@ take URLs from it instead of writing the scheme yourself.
   the page, so `server.hmr.clientPort: 7480` stays the only setting.
 - `berthlight cert` needs the user's DNS provider credentials and talks to a
   CA: do not run it, or `berthlight cert --install-timer`, without asking.
+  Its first run needs `--accept-tos`, the user's agreement to the CA's
+  terms; never pass it on the user's behalf.
   Never put DNS credentials in a devcontainer or a project file.
 
 ## When it does not work

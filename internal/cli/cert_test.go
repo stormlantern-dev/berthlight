@@ -2,6 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"encoding/pem"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +89,32 @@ func TestCertNeedsDomainAndProvider(t *testing.T) {
 	errb.Reset()
 	if code := Run([]string{"--no-header", "cert"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "--dns") || !strings.Contains(errb.String(), "gcloud") {
 		t.Errorf("no provider: %d %s", code, errb.String())
+	}
+}
+
+// TestCertNeedsAcceptTOS: the first run, which creates the ACME account,
+// says where the CA's terms are and which flag accepts them.
+func TestCertNeedsAcceptTOS(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"newNonce": %q, "newAccount": %q, "newOrder": %q, "meta": {"termsOfService": "https://ca.example/terms"}}`,
+			srv.URL+"/nonce", srv.URL+"/acct", srv.URL+"/order")
+	}))
+	defer srv.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEGO_CA_CERTIFICATES", caFile)
+	t.Setenv("BERTHLIGHT_STATE_DIR", t.TempDir())
+	t.Setenv("BERTHLIGHT_ACME_DIR", t.TempDir())
+	t.Setenv("BERTHLIGHT_BASE", "dev.example.com")
+	t.Setenv("BERTHLIGHT_RUNTIME", "no-such-runtime")
+	t.Setenv("EXEC_PATH", "/bin/true")
+	var out, errb bytes.Buffer
+	code := Run([]string{"--no-header", "cert", "--dns", "exec", "--server", srv.URL + "/dir"}, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "https://ca.example/terms") || !strings.Contains(errb.String(), "--accept-tos") {
+		t.Errorf("without --accept-tos: %d %s", code, errb.String())
 	}
 }
 
