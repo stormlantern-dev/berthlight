@@ -1,8 +1,8 @@
 name: Install winget
 description: >
-  Put winget on a Windows runner, which does not ship it, with Microsoft's
-  own module for that (Microsoft.WinGet.Client, Repair-WinGetPackageManager),
-  and allow installing from local manifests.
+  Put a current winget on a Windows runner with Microsoft's own module for
+  that (Microsoft.WinGet.Client, Repair-WinGetPackageManager), and allow
+  installing from local manifests.
 
 runs:
   using: composite
@@ -12,21 +12,26 @@ runs:
       env:
         # PowerShell Gallery, 2026-09-21; the same version as winget-cli v1.29.380.
         WINGET_CLIENT_VERSION: 1.29.380
+        # The first winget that knows manifest schema 1.12.
+        WINGET_MINIMUM: "1.12"
       run: |
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION -Scope AllUsers -Force
-          Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION
-          Repair-WinGetPackageManager -AllUsers -Latest -Force
-        }
+        # The image may carry an older winget (v1.11 on windows-2025 in
+        # October 2026), which does not know the manifests' schema 1.12 and
+        # validates them against an older one. So always install a current one.
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION -Scope AllUsers -Force
+        Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION
+        Repair-WinGetPackageManager -AllUsers -Latest -Force
         # winget is an app execution alias, in a directory new shells get.
         $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
         $env:PATH = "$alias;$env:PATH"
         Add-Content -Path $env:GITHUB_PATH -Value $alias
         # Portable packages are linked here; a later step runs them by name.
         Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
-        winget --version
+        $v = (winget --version).Trim()
+        if ([version]$v.TrimStart('v') -lt [version]$env:WINGET_MINIMUM) { throw "winget $v is older than $env:WINGET_MINIMUM" }
+        Write-Output "winget $v"
         winget settings --enable LocalManifestFiles
