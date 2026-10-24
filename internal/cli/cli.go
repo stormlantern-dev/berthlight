@@ -261,6 +261,7 @@ Environment:
   BERTHLIGHT_STATE_DIR   where routes and certificates are kept
   BERTHLIGHT_ACME_DIR    the ACME account and cert.env, for cert (default ~/.config/berthlight)
   BERTHLIGHT_NO_ANIMATION  set to draw no header or progress animation (also off in CI and without a terminal)
+  BERTHLIGHT_SCENE       amiga or c64: force the header's scene (default: amiga, c64 when a link is too slow)
 `)
 }
 

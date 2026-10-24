@@ -157,10 +157,9 @@ func TestKittyImage(t *testing.T) {
 
 // testHeader is an animating header writing to a buffer, as StartHeader
 // makes one for a Kitty terminal.
+// It draws the chunky scene.
 func testHeader(buf io.Writer) *Header {
-	h := &Header{w: buf, mode: modeKitty, id: 9, start: time.Now(), frame: Frame, stop: make(chan struct{}), done: make(chan struct{})}
-	go h.animate()
-	return h
+	return startKitty(buf, false, false, nil)
 }
 
 type lockedBuffer struct {

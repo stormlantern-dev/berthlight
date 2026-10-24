@@ -357,10 +357,18 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   In terminals with the Kitty graphics protocol it is drawn Amiga-style at
   four times the resolution, in 12-bit colour with ordered dithering:
   copper bars per scanline, chrome letters, a moon, and reflections in the
-  water; over SSH, where each frame costs bandwidth, the chunky version. Animated where the Kitty graphics protocol
-  is available (Kitty, Ghostty) while the command works, at most 4 seconds,
-  and on its last frame at the command's first output, so it never holds a
-  command up; the last frame in half blocks on other truecolor terminals;
+  water. Animated where the Kitty graphics protocol is available (Kitty,
+  Ghostty) while the command works, at most 4 seconds, and on its last
+  frame at the command's first output, so it never holds a command up for
+  more than the frame on its way to the terminal: a connection that falls
+  behind drops frames rather than queueing them. Over SSH the header
+  watches the connection's own socket for what the client has not received
+  yet, since sshd takes frames long before they arrive; where it cannot see
+  that, it shows the chunky version, which needs a quarter of the
+  bandwidth. Where fewer than 5 frames a second get through (under about
+  0.75 Mbit/s), the Amiga version falls back to the chunky one for the rest
+  of the run. `BERTHLIGHT_SCENE=amiga` or `=c64` forces either. The last
+  frame in half blocks on other truecolor terminals;
   one line of text elsewhere. Without arguments, and as `berthlight demo`, it
   plays to its end. Not for `url`, `proxy`, `skill show` or `--json`, and
   never with the global flag `--no-header`.
