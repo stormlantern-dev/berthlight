@@ -1,7 +1,7 @@
 # Publishes a release from a version tag (PRD 0001, R9): binaries, packages,
 # the Homebrew cask, the Scoop manifest, the AUR package and the multi-arch
 # proxy image, with signed checksums and build provenance. Then installs the
-# release the way users do and runs it.
+# release the way users do and runs it, and submits it to winget (R10).
 #
 # No stored secrets. The tap and bucket token comes from the release GitHub
 # App, and the AUR push is signed with an SSH key; both keys live in Cloud
@@ -9,6 +9,13 @@
 # Repository variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER,
 # TAP_KMS_KEY_VERSION and AUR_KMS_KEY_RING. AUR_ENABLED=true turns the AUR
 # on; without it the release publishes everything else.
+#
+# winget: WINGET_ENABLED=true installs the release with winget and commits
+# the manifests to the organisation's fork of microsoft/winget-pkgs, with
+# the same App. Opening the pull request upstream takes a user's token (see
+# .github/actions/winget-pr-token), read from Secret Manager when
+# WINGET_PR_TOKEN_SECRET names it; without it the job stops at the branch
+# and links the page to open the pull request from by hand.
 name: Release
 
 on:
@@ -71,6 +78,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           AUR_SSH_AGENT: ${{ steps.aur.outputs.agent }}
+      # GoReleaser only writes the winget manifests; the winget jobs below
+      # test and submit them.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winget-manifests
+          path: dist/winget/
+          if-no-files-found: error
       # Revoke rather than wait an hour for it to expire; stop the agent.
       - name: Revoke the token, stop the agent
         if: always()
@@ -188,3 +202,93 @@ jobs:
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
           docker run --rm --entrypoint /berthlight "$ref" version | grep -F "${GITHUB_REF_NAME#v}"
+
+  # R10: install the release from its winget manifests before submitting
+  # them; winget-pkgs' checklist asks for `winget validate` and
+  # `winget install --manifest`. Not for pre-releases, as GoReleaser's
+  # skip_upload: auto would.
+  winget-test:
+    needs: release
+    if: ${{ vars.WINGET_ENABLED == 'true' && !contains(github.ref_name, '-') && !github.event.repository.private }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winget-manifests
+          path: winget
+      - uses: ./.github/actions/winget-cli
+      - name: winget validate, install, run
+        shell: pwsh
+        run: |
+          $dir = (Get-ChildItem -Directory -Path winget/manifests/*/*/*/* | Select-Object -First 1).FullName
+          winget validate --manifest $dir
+          if ($LASTEXITCODE -ne 0) { throw "winget validate failed ($LASTEXITCODE)" }
+          winget install --manifest $dir --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
+          $env:PATH = "$env:LOCALAPPDATA\Microsoft\WinGet\Links;$env:PATH"
+          $v = berthlight version
+          if ($v -notmatch [regex]::Escape($env:GITHUB_REF_NAME.TrimStart('v'))) { throw "unexpected version: $v" }
+
+  winget:
+    needs: winget-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # WIF for the App key and the pull request token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winget-manifests
+          path: ${{ runner.temp }}/winget
+      - name: Find the manifests
+        id: dir
+        run: |
+          dirs=("$RUNNER_TEMP"/winget/manifests/*/*/*/*/)
+          test "${#dirs[@]}" -eq 1
+          echo "dir=${dirs[0]%/}" >> "$GITHUB_OUTPUT"
+      - name: The manifests match the schemas
+        id: manifests
+        uses: ./.github/actions/winget-schema
+        with:
+          manifests: ${{ steps.dir.outputs.dir }}
+      - name: Mint a token for the winget-pkgs fork
+        id: app_token
+        uses: ./.github/actions/app-token
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
+          kms-key-version: ${{ vars.TAP_KMS_KEY_VERSION }}
+          repositories: winget-pkgs
+      - name: Read the pull request token
+        id: pr_token
+        if: vars.WINGET_PR_TOKEN_SECRET != ''
+        uses: ./.github/actions/winget-pr-token
+        with:
+          workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
+          secret-version: ${{ vars.WINGET_PR_TOKEN_SECRET }}
+      - name: Submit to microsoft/winget-pkgs
+        uses: ./.github/actions/winget-submit
+        with:
+          manifests: ${{ steps.dir.outputs.dir }}
+          identifier: ${{ steps.manifests.outputs.identifier }}
+          version: ${{ steps.manifests.outputs.version }}
+          app-token: ${{ steps.app_token.outputs.token }}
+          pr-token: ${{ steps.pr_token.outputs.token }}
+          read-token: ${{ github.token }}
+      - name: Revoke the App token
+        if: always()
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" https://api.github.com/installation/token || true
+          fi
+          rm -f gha-creds-*.json

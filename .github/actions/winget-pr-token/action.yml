@@ -1,0 +1,62 @@
+name: Read the winget pull request token
+description: >
+  Read the token that opens pull requests on microsoft/winget-pkgs from
+  Secret Manager, through Workload Identity Federation. It is not stored in
+  GitHub.
+
+# Why a token at all: GoReleaser, komac, wingetcreate and winget-releaser
+# all push the manifests to a fork and open a pull request on
+# microsoft/winget-pkgs. The push needs nothing stored: the release App
+# writes to the organisation's fork (.github/actions/app-token). The pull
+# request does: an App's installation tokens, and the user tokens it can
+# issue, only reach accounts where the App is installed, and nobody outside
+# Microsoft can install an App on microsoft/winget-pkgs. Fine-grained
+# personal tokens fail on that call too (russellbanks/Komac#310). What is
+# left is a classic token with the public_repo scope.
+#
+# That token belongs to a machine user that owns nothing and is a member of
+# nothing: public_repo then lets it open pull requests and issues, and write
+# to no repository. It lives in Secret Manager in stormlantern-release;
+# the WIF provider admits only release.yml on a v* tag and
+# verify-release-credentials.yml on main, as for the App key.
+#
+# The calling job needs `permissions: id-token: write`.
+
+inputs:
+  workload-identity-provider:
+    description: Full WIF provider name (repository variable TAP_WIF_PROVIDER).
+    required: true
+  secret-version:
+    description: Full Secret Manager version name (repository variable WINGET_PR_TOKEN_SECRET).
+    required: true
+
+outputs:
+  token:
+    description: The token, masked in the log.
+    value: ${{ steps.read.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      id: gcp
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        create_credentials_file: false
+
+    - name: Read the secret
+      id: read
+      shell: bash
+      env:
+        SECRET_VERSION: ${{ inputs.secret-version }}
+        GCP_TOKEN: ${{ steps.gcp.outputs.auth_token }}
+      run: |
+        set -euo pipefail
+        token=$(curl -fsS --retry 3 -H "Authorization: Bearer ${GCP_TOKEN}" \
+            "https://secretmanager.googleapis.com/v1/${SECRET_VERSION}:access" \
+          | jq -er .payload.data | openssl base64 -d -A | tr -d '\r\n')
+        test -n "$token"
+        echo "::add-mask::${token}"
+        echo "token=${token}" >> "$GITHUB_OUTPUT"
+        echo "read ${SECRET_VERSION##*/secrets/}"
