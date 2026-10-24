@@ -1,18 +1,18 @@
-name: Submit the winget manifests
+name: Push the winget manifests to the fork
 description: >
   Commit one package version's manifests to a branch of the organisation's
-  fork of microsoft/winget-pkgs, then open the pull request upstream, or,
-  without a pull request token, say where to open it by hand.
+  fork of microsoft/winget-pkgs, and put a link in the job summary that
+  opens the pull request upstream, title and body filled in.
 
-# Two tokens, each with the least it needs:
-# - app-token: the release App, contents: write on the fork only. It syncs
-#   the fork and writes the branch; the commit is made through the API, so
-#   GitHub signs it as the App.
-# - pr-token: a machine user's classic token (public_repo), used for one
-#   call: creating the pull request (see .github/actions/winget-pr-token).
+# A person opens the pull request, on purpose (PRD 0001, R10). Opening it
+# from here would take a long-lived user token: an App only acts where it
+# is installed, which microsoft/winget-pkgs is not, and fine-grained tokens
+# cannot make that call. This project keeps no such token.
 #
-# Re-running the release updates the same branch, and the open pull
-# request with it.
+# app-token is the release App's, contents: write on the fork only. It
+# syncs the fork and writes the branch; the commit is made through the API,
+# so GitHub signs it as the App. Re-running the release updates the same
+# branch, and an open pull request with it.
 
 inputs:
   manifests:
@@ -27,9 +27,6 @@ inputs:
   app-token:
     description: Release App token with contents write on the fork.
     required: true
-  pr-token:
-    description: Token that opens the pull request upstream; empty to stop at the branch.
-    default: ""
   read-token:
     description: Token for reading upstream (the workflow's GITHUB_TOKEN will do).
     required: true
@@ -42,21 +39,20 @@ inputs:
 
 outputs:
   url:
-    description: The pull request, or the page to open it from.
-    value: ${{ steps.submit.outputs.url }}
+    description: The open pull request, or the link that opens it.
+    value: ${{ steps.push.outputs.url }}
 
 runs:
   using: composite
   steps:
-    - name: Submit
-      id: submit
+    - name: Push
+      id: push
       shell: bash
       env:
         DIR: ${{ inputs.manifests }}
         ID: ${{ inputs.identifier }}
         VERSION: ${{ inputs.version }}
         APP_TOKEN: ${{ inputs.app-token }}
-        PR_TOKEN: ${{ inputs.pr-token }}
         READ_TOKEN: ${{ inputs.read-token }}
         FORK: ${{ inputs.fork }}
         UPSTREAM: ${{ inputs.upstream }}
@@ -107,30 +103,32 @@ runs:
           api "$APP_TOKEN" -X POST "$gh_api/$FORK/git/refs" \
             -d "$(jq -cn --arg r "refs/heads/${branch}" --arg s "$commit" '{ref: $r, sha: $s}')" > /dev/null
         fi
-        echo "- committed ${dest} to ${FORK}@${branch} (${commit:0:12})" >> "$GITHUB_STEP_SUMMARY"
 
         head="${FORK%%/*}:${branch}"
         existing=$(api "$READ_TOKEN" "$gh_api/$UPSTREAM/pulls?state=open&head=${head}" | jq -r '.[0].html_url // empty')
         if [ -n "$existing" ]; then
-          echo "- the pull request is already open and now has this commit: ${existing}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## winget: pull request updated"
+            echo
+            echo "The open pull request now has this release's manifests: ${existing}"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "url=${existing}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        # The checklist of winget-pkgs' pull request template. Ticked: what
-        # the release checked (schema, winget validate and winget install in
-        # the winget-test job, no other open pull request for this branch,
-        # one manifest) and the CLA, which the machine user signs before
-        # WINGET_PR_TOKEN_SECRET is set (PRD 0001, R10), or the person who
-        # opens it by hand has signed.
+        # winget-pkgs' pull request template. Ticked: what the release
+        # checked (schema; winget validate and winget install in the
+        # winget-test job; no open pull request for this branch; one
+        # manifest). The CLA box is the person's to tick: they sign once,
+        # when the CLA bot asks on their first pull request.
         body=$(cat <<EOF
         ## 📖 Description
 
-        ${ID} ${VERSION}, from https://github.com/stormlantern-dev/berthlight/releases/tag/${GITHUB_REF_NAME}. Submitted by its release workflow (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
+        ${ID} ${VERSION}, from https://github.com/stormlantern-dev/berthlight/releases/tag/${GITHUB_REF_NAME}. Manifests written and tested by its release workflow (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
 
         ## ✅ Checklist
 
-        - [x] Signed the [Contributor License Agreement](https://cla.opensource.microsoft.com)
+        - [ ] Signed the [Contributor License Agreement](https://cla.opensource.microsoft.com)
         - [ ] Linked to an issue (if applicable)
 
         ## 📦 Manifest Checklist
@@ -143,24 +141,15 @@ runs:
         EOF
         )
 
-        if [ -z "$PR_TOKEN" ]; then
-          q=$(jq -rn --arg t "$title" '$t | @uri')
-          url="https://github.com/${UPSTREAM}/compare/${base}...${FORK/\//:}:${branch}?expand=1&title=${q}"
-          {
-            echo "- no pull request token (WINGET_PR_TOKEN_SECRET): open the pull request by hand: ${url}"
-            echo
-            echo '```markdown'
-            printf '%s\n' "$body"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::open the winget pull request by hand: ${url}"
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        url=$(api "$PR_TOKEN" -X POST "$gh_api/$UPSTREAM/pulls" \
-          -d "$(jq -cn --arg t "$title" --arg h "$head" --arg b "$base" --arg body "$body" \
-                '{title: $t, head: $h, base: $b, body: $body, maintainer_can_modify: false}')" \
-          | jq -er .html_url)
-        echo "- opened ${url}" >> "$GITHUB_STEP_SUMMARY"
+        url="https://github.com/${UPSTREAM}/compare/${base}...${FORK/\//:}:${branch}?expand=1&title=$(jq -rn --arg v "$title" '$v | @uri')&body=$(jq -rn --arg v "$body" '$v | @uri')"
+        {
+          echo "## winget: open the pull request"
+          echo
+          echo "### ➡️ [Open \"${title}\" on ${UPSTREAM}](${url})"
+          echo
+          echo "Title and body are filled in; check the CLA box once you have signed (the CLA bot asks on your first pull request), then create it."
+          echo
+          echo "Branch: [\`${FORK}@${branch}\`](https://github.com/${FORK}/tree/${branch}), commit ${commit:0:12}, adds \`${dest}\`."
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "::notice title=winget::open the pull request from this run's summary: ${title}"
         echo "url=${url}" >> "$GITHUB_OUTPUT"
