@@ -151,15 +151,24 @@ func TestHeaderFallsBack(t *testing.T) {
 		lastWant string
 	}{
 		{"very slow", 300 * time.Millisecond, 0, true, false, "chunky"},
-		{"very slow behind a buffer", 300 * time.Millisecond, 30, true, false, "chunky"},
+		{"very slow behind a buffer", 300 * time.Millisecond, 8, true, false, "chunky"},
 		{"fast", 0, 0, true, true, "amiga"},
 		{"very slow, forced", 300 * time.Millisecond, 0, false, true, "amiga"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &slowWriter{delay: tc.delay, buffered: tc.buffered}
 			h := startKitty(w, true, tc.auto, nil)
-			// The buffer fills in about 30 frame intervals, 1.2 s.
-			time.Sleep(fallbackAfter + 1500*time.Millisecond)
+			// Past the first second, and past the buffer by more than
+			// fallbackFrames writes. Rendering an Amiga frame takes up to
+			// 100 ms under the race detector on CI, so wait for writes,
+			// not for a fixed time.
+			begin := time.Now()
+			for time.Since(begin) < fallbackAfter+500*time.Millisecond || len(w.writes()) < tc.buffered+fallbackFrames+1 {
+				if time.Since(begin) > SceneLength {
+					t.Fatalf("%d writes by the end of the scene", len(w.writes()))
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			h.Stop()
 			if h.hi != tc.wantHi {
 				t.Errorf("drawing the Amiga scene: %v, want %v (%d frames written)", h.hi, tc.wantHi, h.drawn)
@@ -257,7 +266,10 @@ func TestHeaderWatchesTheLink(t *testing.T) {
 			if h.hi != tc.wantHi {
 				t.Errorf("drawing the Amiga scene: %v, want %v (%d frames)", h.hi, tc.wantHi, l.frames)
 			}
-			if tc.wantHi && l.frames < 30 {
+			// At 50 KB/s an Amiga frame takes 0.4 s; on the fast link the
+			// frames come as fast as they render (10 a second or more,
+			// under the race detector on CI).
+			if tc.wantHi && l.frames < 15 {
 				t.Errorf("%d frames on a fast link", l.frames)
 			}
 		})
