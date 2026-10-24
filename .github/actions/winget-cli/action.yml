@@ -1,15 +1,13 @@
 name: Install winget
 description: >
-  Put a known winget on a Windows runner with Microsoft's own module for
-  that (Microsoft.WinGet.Client, Repair-WinGetPackageManager), and allow
-  installing from local manifests.
+  Put a known winget on a Windows runner, from winget-cli's own release
+  files with their checksums, and allow installing from local manifests.
 
-inputs:
-  github-token:
-    description: >
-      Token for the module's GitHub API calls; anonymous calls from shared
-      runner addresses hit the rate limit.
-    default: ${{ github.token }}
+# The image carries an older winget (v1.11 on windows-2025 in October 2026),
+# which does not know the manifests' schema 1.12 and validates them against
+# an older one. Microsoft.WinGet.Client's Repair-WinGetPackageManager failed
+# to replace it on the runner, so this installs the release bundle and its
+# dependencies directly.
 
 runs:
   using: composite
@@ -17,18 +15,31 @@ runs:
     - name: Install winget
       shell: pwsh
       env:
-        # winget-cli v1.29.380 and its PowerShell module, 2026-09-21.
+        # winget-cli v1.29.380, 2026-09-21; the digests are the release's.
         WINGET_VERSION: 1.29.380
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        BUNDLE_SHA256: 65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e
+        DEPENDENCIES_SHA256: ba875afe9d190f61218985ac0292a99d1db710bf93e13c68944ca9d89f0d82d1
       run: |
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
-        # The image carries an older winget (v1.11 on windows-2025 in
-        # October 2026), which does not know the manifests' schema 1.12 and
-        # validates them against an older one. So always install this one.
-        Install-PSResource -Name Microsoft.WinGet.Client -Version $env:WINGET_VERSION -Repository PSGallery -TrustRepository -Scope AllUsers
-        Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_VERSION
-        Repair-WinGetPackageManager -AllUsers -Force -Version $env:WINGET_VERSION
+        $base = "https://github.com/microsoft/winget-cli/releases/download/v$env:WINGET_VERSION"
+        $dir = Join-Path $env:RUNNER_TEMP 'winget-cli'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $bundle = Join-Path $dir 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
+        $deps = Join-Path $dir 'DesktopAppInstaller_Dependencies.zip'
+        Invoke-WebRequest -Uri "$base/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" -OutFile $bundle
+        Invoke-WebRequest -Uri "$base/DesktopAppInstaller_Dependencies.zip" -OutFile $deps
+        foreach ($f in @(@($bundle, $env:BUNDLE_SHA256), @($deps, $env:DEPENDENCIES_SHA256))) {
+          $h = (Get-FileHash -Algorithm SHA256 -Path $f[0]).Hash.ToLower()
+          if ($h -ne $f[1]) { throw "checksum mismatch for $($f[0]): $h" }
+        }
+        Expand-Archive -Path $deps -DestinationPath (Join-Path $dir 'deps') -Force
+        $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+        Get-ChildItem -Recurse -Path (Join-Path $dir 'deps') -Include *.appx, *.msix |
+          Where-Object { $_.FullName -match "\\$arch\\" } |
+          ForEach-Object { Write-Output "dependency $($_.Name)"; Add-AppxPackage -Path $_.FullName -ErrorAction Continue }
+        Add-AppxPackage -Path $bundle -ForceApplicationShutdown -ForceUpdateFromAnyVersion
+
         # winget is an app execution alias, in a directory new shells get.
         $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
         $env:PATH = "$alias;$env:PATH"
