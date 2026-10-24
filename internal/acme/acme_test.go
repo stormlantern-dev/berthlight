@@ -3,6 +3,12 @@ package acme
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,6 +53,49 @@ func TestEnsureNotDue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "gcloud") {
 		t.Errorf("due with an unknown provider: %v", err)
 	}
+}
+
+// TestTermsNeeded: a new account is not registered unless the CA's terms
+// are accepted, and the refusal names the terms' URL from the directory.
+func TestTermsNeeded(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dir" {
+			t.Errorf("unexpected request %s %s: nothing past the directory before the terms are accepted", r.Method, r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"newNonce": %q, "newAccount": %q, "newOrder": %q, "revokeCert": %q, "keyChange": %q,
+			"meta": {"termsOfService": "https://ca.example/terms.pdf"}}`,
+			srv.URL+"/nonce", srv.URL+"/acct", srv.URL+"/order", srv.URL+"/revoke", srv.URL+"/key")
+	}))
+	defer srv.Close()
+	t.Setenv("LEGO_CA_CERTIFICATES", trustTestServer(t, srv))
+	t.Setenv("EXEC_PATH", "/bin/true")
+	acct := t.TempDir()
+	_, err := Ensure(context.Background(), Options{
+		Domain: "dev.example.com", Provider: "exec", Server: srv.URL + "/dir",
+		StateDir: t.TempDir(), AccountDir: acct,
+	})
+	var terms *TermsError
+	if !errors.As(err, &terms) || terms.Terms != "https://ca.example/terms.pdf" || !strings.Contains(err.Error(), "https://ca.example/terms.pdf") {
+		t.Fatalf("without AcceptTOS: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(acct, "accounts")); len(entries) != 0 {
+		t.Errorf("an account was saved without the terms accepted: %v", entries)
+	}
+}
+
+// trustTestServer writes srv's certificate to a file, for
+// LEGO_CA_CERTIFICATES: lego speaks HTTPS only.
+func trustTestServer(t *testing.T, srv *httptest.Server) string {
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	b := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestAccountDirOutsideState(t *testing.T) {

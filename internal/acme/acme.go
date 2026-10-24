@@ -64,6 +64,9 @@ type Options struct {
 	// Zero: when less than a third of its lifetime is left, as Let's
 	// Encrypt advises, whatever lifetime the CA gives.
 	RenewWithin time.Duration
+	// AcceptTOS agrees to the CA's terms of service, which registering a
+	// new ACME account requires. Not needed once the account exists.
+	AcceptTOS bool
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// Log receives lego's progress. Default: discarded.
@@ -78,6 +81,21 @@ type Result struct {
 	NotAfter time.Time
 	// RenewAt is when it is due for renewal.
 	RenewAt time.Time
+}
+
+// TermsError says that a new ACME account needs the CA's terms of service
+// accepted, and where they are.
+type TermsError struct {
+	Server string
+	// Terms is the terms' URL from the CA's directory; empty if it has none.
+	Terms string
+}
+
+func (e *TermsError) Error() string {
+	if e.Terms == "" {
+		return fmt.Sprintf("a new ACME account with %s means agreeing to the CA's terms of service", e.Server)
+	}
+	return fmt.Sprintf("a new ACME account with %s means agreeing to the CA's terms of service: %s", e.Server, e.Terms)
 }
 
 // Due returns when a certificate is due for renewal.
@@ -142,6 +160,12 @@ func Ensure(ctx context.Context, o Options) (Result, error) {
 		return Result{}, err
 	}
 	if acct.Registration == nil {
+		// A new account agrees to the CA's terms: only when the user
+		// says so. An existing account already has, so renewals and the
+		// timer need nothing more.
+		if !o.AcceptTOS {
+			return Result{}, &TermsError{Server: server, Terms: client.GetServerMetadata().TermsOfService}
+		}
 		reg, err := client.Registration.Register(ctx, registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
 			return Result{}, fmt.Errorf("registering an ACME account with %s: %w", server, err)

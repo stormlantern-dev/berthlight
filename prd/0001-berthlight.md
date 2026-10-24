@@ -247,9 +247,12 @@ too. The proxy only receives the certificate and key files:
   TLS and says when the certificate does not verify.
 
 A certificate is renewed when less than a third of its lifetime is left, so
-shorter lifetimes need no new setting. `berthlight cert --install-timer`
-installs a daily renewal (systemd user timer, or launchd agent on macOS)
-that runs the same command.
+shorter lifetimes need no new setting. Creating the ACME account agrees to
+the CA's terms of service, so the first run needs `--accept-tos`; without
+it, `cert` stops and names the terms' URL from the CA's directory and the
+flag. Once the account exists, renewals need no flag.
+`berthlight cert --install-timer` installs a daily renewal (systemd user
+timer, or launchd agent on macOS) that runs the same command.
 
 *Fit:* an integration test against Pebble (Let's Encrypt's test ACME server)
 with a test DNS server issues and renews a certificate that the proxy then
@@ -418,13 +421,17 @@ the tracking issue.
   60 MB and add over a thousand packages to audit and update. The set covers
   the operator's Google Cloud DNS and the most used services, and `exec`,
   `httpreq` and `dnsupdate` (RFC 2136) reach the rest. Adding a provider is
-  one line. Proposed by Claude, 2026-10-24, for the operator to confirm.
+  one line. Decided by the operator, 2026-10-24.
+- **The CA's terms are accepted explicitly** (R7): `--accept-tos` when the
+  ACME account is created, as lego's own CLI asks, rather than agreeing on
+  the user's behalf. Renewals use the existing account and need no flag.
+  Decided by the operator, 2026-10-24.
 - **The proxy reads the certificate key through a group** (R7): mode 0640
   and the user's group as the proxy's supplementary group, rather than a
-  world-readable key. Proposed by Claude, 2026-10-24.
+  world-readable key.
 - **308 for the HTTP to HTTPS redirect** (R2, R7): it keeps the method and
-  body, so a form posted to an `http` URL still arrives. Proposed by Claude,
-  2026-10-24.
+  body, so a form posted to an `http` URL still arrives. Decided by the
+  operator, 2026-10-24.
 
 ## Open questions
 
