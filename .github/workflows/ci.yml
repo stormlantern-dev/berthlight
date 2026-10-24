@@ -66,6 +66,7 @@ jobs:
       BERTHLIGHT_RUNTIME: ${{ matrix.runtime }}
       BERTHLIGHT_IMAGE: localhost/berthlight:test
       BERTHLIGHT_REQUIRE_DEVCONTAINER: "1"
+      BERTHLIGHT_REQUIRE_PEBBLE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,6 +88,10 @@ jobs:
       # load the NAT ones its port forwarding needs.
       - name: Load NAT modules
         run: sudo modprobe -a nft_nat nft_masq nft_chain_nat || true
+      # R7: Let's Encrypt's test ACME server and its DNS server, for the
+      # HTTPS test.
+      - name: Install Pebble
+        run: go install github.com/letsencrypt/pebble/v2/cmd/pebble@v2.10.1 github.com/letsencrypt/pebble/v2/cmd/pebble-challtestsrv@v2.10.1
       - name: Build the proxy image
         run: ${{ matrix.runtime }} build -t "$BERTHLIGHT_IMAGE" .
       - name: Integration tests

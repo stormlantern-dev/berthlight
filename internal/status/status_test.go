@@ -2,6 +2,8 @@ package status
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"stormlantern.nl/berthlight/internal/certs/certstest"
 	"stormlantern.nl/berthlight/internal/proxy"
 	"stormlantern.nl/berthlight/internal/route"
 )
@@ -186,6 +189,46 @@ func TestResolution(t *testing.T) {
 		rs := c.Check(context.Background(), table("custom")).Routes[0]
 		if rs.OK != tt.ok || !strings.Contains(rs.Detail, tt.want) {
 			t.Errorf("%v %v: ok=%v %q, want %q", tt.addrs, tt.err, rs.OK, rs.Detail, tt.want)
+		}
+	}
+}
+
+// TestHTTPS: with a certificate, status gives https URLs and probes over
+// TLS, as a browser would, and says so when the certificate does not
+// verify (PRD 0001, R7).
+func TestHTTPS(t *testing.T) {
+	ca := certstest.NewCA(t)
+	crt, key := ca.Leaf(t, 1, time.Hour, "*.dev.example.com")
+	pair, err := tls.X509KeyPair(crt, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	_, p, _ := net.SplitHostPort(u.Host)
+	port, _ := strconv.Atoi(p)
+
+	for _, tt := range []struct {
+		roots *x509.CertPool
+		ok    bool
+		want  string
+	}{
+		{ca.Pool, true, "HTTP 200"},
+		{certstest.NewCA(t).Pool, false, "certificate for custom.dev.example.com does not verify"},
+	} {
+		c := checker(healthy("custom"), port)
+		c.Bases = []string{"dev.example.com"}
+		c.HTTPS, c.RootCAs = true, tt.roots
+		c.Resolve = func(context.Context, string) ([]string, error) { return []string{"127.0.0.1"}, nil }
+		rs := c.Check(context.Background(), table("custom")).Routes[0]
+		if rs.OK != tt.ok || !strings.Contains(rs.Detail, tt.want) {
+			t.Errorf("ok=%v %q, want ok=%v and %q", rs.OK, rs.Detail, tt.ok, tt.want)
+		}
+		if rs.URL != "https://custom.dev.example.com:"+p {
+			t.Errorf("url %q", rs.URL)
 		}
 	}
 }

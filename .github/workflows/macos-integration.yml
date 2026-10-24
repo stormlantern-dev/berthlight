@@ -40,6 +40,7 @@ jobs:
       BERTHLIGHT_RUNTIME: ${{ matrix.runtime }}
       BERTHLIGHT_IMAGE: localhost/berthlight:test
       BERTHLIGHT_REQUIRE_DEVCONTAINER: "1"
+      BERTHLIGHT_REQUIRE_PEBBLE: "1"
       DOCKER_CONTEXT: ${{ matrix.context }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +53,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install -g @devcontainers/cli@0.89.0
+      - name: Install Pebble
+        run: go install github.com/letsencrypt/pebble/v2/cmd/pebble@v2.10.1 github.com/letsencrypt/pebble/v2/cmd/pebble-challtestsrv@v2.10.1
       - name: Build the proxy image
         run: ${{ matrix.runtime }} build -t "$BERTHLIGHT_IMAGE" .
       - name: Integration tests
