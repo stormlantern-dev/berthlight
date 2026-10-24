@@ -20,9 +20,7 @@ runs:
         # The image may carry an older winget (v1.11 on windows-2025 in
         # October 2026), which does not know the manifests' schema 1.12 and
         # validates them against an older one. So always install a current one.
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-        Install-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION -Scope AllUsers -Force
+        Install-PSResource -Name Microsoft.WinGet.Client -Version $env:WINGET_CLIENT_VERSION -Repository PSGallery -TrustRepository -Scope AllUsers
         Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION
         Repair-WinGetPackageManager -AllUsers -Latest -Force
         # winget is an app execution alias, in a directory new shells get.
