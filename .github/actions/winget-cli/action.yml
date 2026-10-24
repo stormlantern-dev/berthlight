@@ -1,0 +1,32 @@
+name: Install winget
+description: >
+  Put winget on a Windows runner, which does not ship it, with Microsoft's
+  own module for that (Microsoft.WinGet.Client, Repair-WinGetPackageManager),
+  and allow installing from local manifests.
+
+runs:
+  using: composite
+  steps:
+    - name: Install winget
+      shell: pwsh
+      env:
+        # PowerShell Gallery, 2026-09-21; the same version as winget-cli v1.29.380.
+        WINGET_CLIENT_VERSION: 1.29.380
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION -Scope AllUsers -Force
+          Import-Module Microsoft.WinGet.Client -RequiredVersion $env:WINGET_CLIENT_VERSION
+          Repair-WinGetPackageManager -AllUsers -Latest -Force
+        }
+        # winget is an app execution alias, in a directory new shells get.
+        $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+        $env:PATH = "$alias;$env:PATH"
+        Add-Content -Path $env:GITHUB_PATH -Value $alias
+        # Portable packages are linked here; a later step runs them by name.
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
+        winget --version
+        winget settings --enable LocalManifestFiles

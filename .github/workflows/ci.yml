@@ -125,3 +125,43 @@ jobs:
           sudo dpkg -i dist/berthlight_*_amd64.deb
           berthlight version
           docker run --rm --entrypoint /berthlight "$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/stormlantern-dev/berthlight | grep amd64 | head -1)" version
+      # R10: the winget manifests a release would submit.
+      - name: Find the winget manifests
+        id: winget
+        run: |
+          dirs=(dist/winget/manifests/*/*/*/*/)
+          test "${#dirs[@]}" -eq 1 || { echo "::error::expected one manifest directory, found: ${dirs[*]}"; exit 1; }
+          echo "dir=${dirs[0]%/}" >> "$GITHUB_OUTPUT"
+      - name: The winget manifests match the schemas
+        uses: ./.github/actions/winget-schema
+        with:
+          manifests: ${{ steps.winget.outputs.dir }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winget-manifests
+          path: dist/winget/
+          if-no-files-found: error
+          retention-days: 7
+
+  # R10: `winget validate`, which only runs on Windows. The snapshot's
+  # installer URLs do not exist, so installing is left to the release.
+  winget:
+    name: winget validate
+    needs: release-snapshot
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winget-manifests
+          path: winget
+      - uses: ./.github/actions/winget-cli
+      - name: winget validate
+        shell: pwsh
+        run: |
+          $dir = Get-ChildItem -Directory -Path winget/manifests/*/*/*/* | Select-Object -First 1
+          winget validate --manifest $dir.FullName
+          if ($LASTEXITCODE -ne 0) { throw "winget validate failed ($LASTEXITCODE)" }

@@ -105,6 +105,45 @@ scoops:
       name: berthlight release
       email: noreply@stormlantern.nl
 
+# winget (PRD 0001, R10). GoReleaser only WRITES the manifests here, to
+# dist/winget, on every release and every snapshot; CI validates them
+# against the winget schemas (scripts/winget-validate.sh). The winget job in
+# release.yml submits them to microsoft/winget-pkgs, in a job of its own:
+#
+# - a pull request upstream needs a user's token, because an App
+#   installation token only reaches repositories the App is installed on;
+#   that token stays out of the GoReleaser job, which runs builds;
+# - a failed submission then cannot fail this job, which signs and attests
+#   the release after GoReleaser (GoReleaser exits non-zero when a
+#   publisher fails, after the others ran).
+#
+# So skip_upload is always true, and repository only names the fork the job
+# pushes to. The job runs once WINGET_ENABLED=true; see release.yml.
+winget:
+  - name: berthlight
+    publisher: Stormlantern
+    publisher_url: https://github.com/stormlantern-dev
+    publisher_support_url: https://github.com/stormlantern-dev/berthlight/issues
+    package_identifier: Stormlantern.Berthlight
+    package_name: berthlight
+    author: Dirk Louwers
+    short_description: Stable names for devcontainer dev servers, without published ports.
+    description: |-
+      berthlight gives each devcontainer's dev server a stable name such as
+      http://gallery.localhost:7480, routed by one loopback-only proxy over
+      per-project container networks. No published ports, no runtime socket,
+      no root.
+    homepage: https://github.com/stormlantern-dev/berthlight
+    license: Apache-2.0
+    license_url: https://github.com/stormlantern-dev/berthlight/blob/main/LICENSE
+    release_notes_url: https://github.com/stormlantern-dev/berthlight/releases/tag/{{ .Tag }}
+    tags: [devcontainer, docker, podman, proxy, localhost, cli]
+    ids: [berthlight]
+    skip_upload: "true"
+    repository:
+      owner: stormlantern-dev
+      name: winget-pkgs
+
 aurs:
   - name: berthlight-bin
     # Off until the AUR account exists (AUR_ENABLED in release.yml, which
