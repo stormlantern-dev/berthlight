@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -12,9 +14,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"stormlantern.nl/berthlight/internal/certs"
+	"stormlantern.nl/berthlight/internal/certs/certstest"
 	"stormlantern.nl/berthlight/internal/route"
 )
 
@@ -245,4 +250,111 @@ func TestServerSniffsTLS(t *testing.T) {
 		t.Errorf("TLS without certificate: read %d bytes, err %v; want closed", n, err)
 	}
 	c.Close()
+}
+
+// TestServerHTTPS: with a certificate, HTTPS and HTTP share the port, and
+// plain HTTP for a name the certificate covers is redirected to HTTPS on
+// the same port; other names stay on HTTP (PRD 0001, R2, R7).
+func TestServerHTTPS(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proto atomic.Value
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proto.Store(r.Header.Get("X-Forwarded-Proto"))
+		fmt.Fprint(w, "ok")
+	})
+	h := NewHandler("localhost", "dev.example.com")
+	tab := &route.Table{}
+	tab.Put(backendRoute(t, "shop", backend))
+	tab.Put(backendRoute(t, "shop-fix-login", backend))
+	h.SetTable(tab)
+	s := &Server{Handler: h, Logf: func(string, ...any) {}}
+
+	ca := certstest.NewCA(t)
+	state := t.TempDir()
+	crt, key := ca.Leaf(t, 1, time.Hour, "*.dev.example.com")
+	if err := certs.Write(state, "dev.example.com", crt, key); err != nil {
+		t.Fatal(err)
+	}
+	set, err := certs.Load(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetCerts(set)
+	go s.Serve(l)
+	defer func() {
+		s.Close()
+		l.Close()
+	}()
+	addr := l.Addr().String()
+
+	// HTTPS, for two worktrees' names under the one wildcard certificate,
+	// over HTTP/2 and HTTP/1.1.
+	for _, name := range []string{"shop", "shop-fix-login"} {
+		for _, h2 := range []bool{true, false} {
+			host := name + ".dev.example.com"
+			tr := &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: ca.Pool, ServerName: host},
+				DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, network, addr)
+				},
+				ForceAttemptHTTP2: h2,
+			}
+			resp, err := (&http.Client{Transport: tr}).Get("https://" + host + ":7480/")
+			if err != nil {
+				t.Fatalf("%s: %v", host, err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			tr.CloseIdleConnections()
+			if string(b) != "ok" || proto.Load() != "https" || (resp.ProtoMajor == 2) != h2 {
+				t.Errorf("%s: body %q, X-Forwarded-Proto %q, %s", host, b, proto.Load(), resp.Proto)
+			}
+		}
+	}
+
+	// Plain HTTP for a covered name: a redirect to HTTPS on the same port,
+	// keeping path and query.
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequest("POST", "http://"+addr+"/login?next=%2F", strings.NewReader("a=b"))
+	req.Host = "shop.dev.example.com:7480"
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPermanentRedirect || resp.Header.Get("Location") != "https://shop.dev.example.com:7480/login?next=%2F" {
+		t.Errorf("http on a covered name: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// A name no certificate covers stays on HTTP.
+	req, _ = http.NewRequest("GET", "http://"+addr+"/", nil)
+	req.Host = "shop.localhost:7480"
+	resp, err = noFollow.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(b) != "ok" || proto.Load() != "http" {
+		t.Errorf("http on shop.localhost: %d %q, X-Forwarded-Proto %q", resp.StatusCode, b, proto.Load())
+	}
+
+	// Renewal: the new certificate is served on the next handshake.
+	crt, key = ca.Leaf(t, 2, time.Hour, "*.dev.example.com")
+	if err := certs.Write(state, "dev.example.com", crt, key); err != nil {
+		t.Fatal(err)
+	}
+	set, _ = certs.Load(state)
+	s.SetCerts(set)
+	conn, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: ca.Pool, ServerName: "shop.dev.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.ConnectionState().PeerCertificates[0].SerialNumber.Int64(); got != 2 {
+		t.Errorf("serial %d after renewal, want 2", got)
+	}
+	conn.Close()
 }

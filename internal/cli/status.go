@@ -41,7 +41,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	chk := status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases}
+	chk := status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases, HTTPS: scheme(c) == "https"}
 	check := func(ctx context.Context) (status.Report, error) {
 		tab, err := route.Load(c.StateDir)
 		if err != nil {

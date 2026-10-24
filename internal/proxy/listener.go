@@ -9,7 +9,10 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"stormlantern.nl/berthlight/internal/certs"
 )
 
 // tlsRecordHandshake is the first byte of every TLS connection.
@@ -17,18 +20,35 @@ const tlsRecordHandshake = 0x16
 
 // Server serves HTTP and, once configured, HTTPS on the same listeners. It
 // tells them apart by the first byte of each connection (PRD 0001, R2).
+// Plain HTTP for a name a certificate covers is redirected to HTTPS on the
+// same port; names no certificate covers stay on HTTP.
 type Server struct {
 	Handler http.Handler
-	// TLS, when set, serves connections that start with a TLS handshake.
-	// Nil until certificates exist (R7); such connections are closed.
-	TLS *tls.Config
 	// Logf defaults to log.Printf.
 	Logf func(format string, args ...any)
+
+	certs atomic.Pointer[certs.Set]
 
 	mu   sync.Mutex
 	http *http.Server
 	tlsL *chanListener
 	httL *chanListener
+}
+
+// SetCerts replaces the certificates (R7). Until a set with at least one
+// certificate is given, TLS connections are closed.
+func (s *Server) SetCerts(c *certs.Set) { s.certs.Store(c) }
+
+// ServeHTTP redirects plain HTTP to HTTPS for names a certificate covers,
+// and hands everything else to Handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil && s.certs.Load().Covers(r.Host) {
+		// 308 keeps the method and body, so a form posted to the http
+		// URL still arrives. Host keeps its port: HTTPS is on the same one.
+		http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+		return
+	}
+	s.Handler.ServeHTTP(w, r)
 }
 
 // Serve accepts connections on every listener until Close.
@@ -39,15 +59,20 @@ func (s *Server) Serve(ls ...net.Listener) error {
 	s.mu.Lock()
 	s.httL = newChanListener(ls[0].Addr())
 	s.tlsL = newChanListener(ls[0].Addr())
-	s.http = &http.Server{Handler: s.Handler, ReadHeaderTimeout: 10 * time.Second}
+	s.http = &http.Server{Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	srv := s.http
 	s.mu.Unlock()
 
+	tlsConf := &tls.Config{
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return s.certs.Load().GetCertificate(hello)
+		},
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
+	}
 	errc := make(chan error, len(ls)+2)
 	go func() { errc <- srv.Serve(s.httL) }()
-	if s.TLS != nil {
-		go func() { errc <- srv.Serve(tls.NewListener(s.tlsL, s.TLS)) }()
-	}
+	go func() { errc <- srv.Serve(tls.NewListener(s.tlsL, tlsConf)) }()
 	for _, l := range ls {
 		go func() { errc <- s.accept(l) }()
 	}
@@ -92,7 +117,7 @@ func (s *Server) dispatch(c net.Conn) {
 	}
 	pc := &peekedConn{Conn: c, r: br}
 	if b[0] == tlsRecordHandshake {
-		if s.TLS == nil {
+		if s.certs.Load().Len() == 0 {
 			s.Logf("TLS connection from %s, but no certificate is configured", c.RemoteAddr())
 			c.Close()
 			return

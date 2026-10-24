@@ -4,6 +4,8 @@ package status
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -33,6 +35,11 @@ type Checker struct {
 	ProxyName string
 	Port      int
 	Bases     []string
+	// HTTPS: a certificate covers the names (R7), so URLs are https and
+	// probes go over TLS, since the proxy redirects plain HTTP.
+	HTTPS bool
+	// RootCAs verify the proxy's certificate. Default: the system's.
+	RootCAs *x509.CertPool
 	// Resolve looks up a host name. Default: the system resolver.
 	Resolve func(ctx context.Context, host string) ([]string, error)
 	// Timeout bounds each probe. Default 10 s: a dev server's first
@@ -107,8 +114,15 @@ func (c Checker) Check(ctx context.Context, t *route.Table) Report {
 	return rep
 }
 
+func (c Checker) scheme() string {
+	if c.HTTPS {
+		return "https"
+	}
+	return "http"
+}
+
 func (c Checker) url(name string) string {
-	return "http://" + naming.Host(name, c.Bases[0]) + ":" + strconv.Itoa(c.Port)
+	return c.scheme() + "://" + naming.Host(name, c.Bases[0]) + ":" + strconv.Itoa(c.Port)
 }
 
 func (c Checker) checkProxy() string {
@@ -156,9 +170,13 @@ func (c Checker) checkRoute(ctx context.Context, rs *RouteStatus, proxyNets []st
 	switch {
 	case err != nil:
 		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
+		var cv *tls.CertificateVerificationError
+		switch {
+		case errors.As(err, &cv):
+			fail("the proxy's certificate for %s does not verify (%v); renew it with: berthlight cert", host, cv.Err)
+		case errors.As(err, &ne) && ne.Timeout():
 			fail("no answer within %s from %s; the dev server may still be starting", c.Timeout, r.Addr())
-		} else {
+		default:
 			fail("request through the proxy failed: %v", err)
 		}
 	case reason == proxy.ErrNoRoute:
@@ -203,7 +221,7 @@ func (c Checker) checkResolves(ctx context.Context, host string) string {
 func (c Checker) probe(ctx context.Context, host string) (int, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "http://"+net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port))+"/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.scheme()+"://"+net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port))+"/", nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -211,6 +229,11 @@ func (c Checker) probe(ctx context.Context, host string) (int, string, error) {
 	client := &http.Client{
 		// A redirect is an answer; do not follow it.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	if c.HTTPS {
+		// The name the browser uses, so the proxy picks the certificate a
+		// browser gets and it is verified as a browser would.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{ServerName: host, RootCAs: c.RootCAs}}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -21,6 +23,10 @@ type ProxySpec struct {
 	StateDir string
 	// Bases are the accepted base domains.
 	Bases []string
+	// Group, if set, is a supplementary group for the proxy: the group,
+	// as the container sees it, of the files the CLI writes, so the proxy
+	// can read the certificate key, which other users cannot (R7).
+	Group string
 }
 
 // RunArgs returns the arguments for `<runtime> run` that start the proxy
@@ -44,8 +50,11 @@ func (s ProxySpec) RunArgs(ipv6, gwPriority bool) []string {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--user", "65532:65532",
-		"--publish", "127.0.0.1:" + port + ":" + strconv.Itoa(ContainerPort),
 	}
+	if s.Group != "" {
+		args = append(args, "--group-add", s.Group)
+	}
+	args = append(args, "--publish", "127.0.0.1:"+port+":"+strconv.Itoa(ContainerPort))
 	if ipv6 {
 		args = append(args, "--publish", "[::1]:"+port+":"+strconv.Itoa(ContainerPort))
 	}
@@ -78,6 +87,46 @@ func (r Runtime) StartProxy(s ProxySpec) error {
 		_ = r.RemoveContainer(s.Name)
 	}
 	return fmt.Errorf("starting proxy failed:\n  %s", strings.Join(errs, "\n  "))
+}
+
+// ProxyGroup is the group that the files the CLI writes have inside the
+// proxy container: the user's own group, except where the runtime maps the
+// user to root in a user namespace (rootless Podman or Docker), where it is
+// 0. Empty where there are no groups (Windows).
+func (r Runtime) ProxyGroup() string {
+	gid := os.Getegid()
+	if gid < 0 {
+		return ""
+	}
+	if gid != 0 && r.rootless() {
+		return "0"
+	}
+	return strconv.Itoa(gid)
+}
+
+// rootless reports whether the runtime runs in the user's user namespace.
+// Podman's format comes first, so Podman behind a docker shim is found too.
+func (r Runtime) rootless() bool {
+	if out, err := r.Run("info", "--format", "{{.Host.Security.Rootless}}"); err == nil {
+		return strings.TrimSpace(out) == "true"
+	}
+	out, err := r.Run("info", "--format", "{{json .SecurityOptions}}")
+	return err == nil && strings.Contains(out, "rootless")
+}
+
+// ContainerGroups returns a container's supplementary groups.
+func (r Runtime) ContainerGroups(name string) ([]string, error) {
+	out, err := r.Run("container", "inspect", "--format", "{{json .HostConfig.GroupAdd}}", name)
+	if err != nil {
+		return nil, err
+	}
+	var groups []string
+	if s := strings.TrimSpace(out); s != "" && s != "null" {
+		if err := json.Unmarshal([]byte(s), &groups); err != nil {
+			return nil, fmt.Errorf("parsing groups of %s: %w", name, err)
+		}
+	}
+	return groups, nil
 }
 
 // IsRouteNetwork reports whether a network name belongs to a route.

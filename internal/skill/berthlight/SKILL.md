@@ -93,6 +93,24 @@ directory name, never its branch.
 - **Cookies**: never set `Domain=.localhost` (or the base domain): each
   worktree keeps its own session only when cookies have no `Domain`.
 
+## HTTPS on the user's own domain
+
+The user may have set berthlight up with a domain they own
+(`BERTHLIGHT_BASE=dev.example.com`) and a publicly trusted wildcard
+certificate from `berthlight cert`. Then names are
+`https://shop.dev.example.com:7480`, on the same port, and plain http to
+them is redirected to https. `berthlight url` prints whichever applies, so
+take URLs from it instead of writing the scheme yourself.
+
+- Use the base the user has in host checks (`.dev.example.com` rather than
+  `.localhost`), and https redirect URIs: an https name is accepted by
+  every OAuth provider that accepts https.
+- Hot reload goes over `wss://` on port 7480; Vite picks the protocol from
+  the page, so `server.hmr.clientPort: 7480` stays the only setting.
+- `berthlight cert` needs the user's DNS provider credentials and talks to a
+  CA: do not run it, or `berthlight cert --install-timer`, without asking.
+  Never put DNS credentials in a devcontainer or a project file.
+
 ## When it does not work
 
 Run `berthlight status`. Each problem has its own message:
@@ -106,6 +124,7 @@ Run `berthlight status`. Each problem has its own message:
 | no container answers to "bl-..." | devcontainer not running, or runArgs missing: run step 3 again and rebuild |
 | nothing listens on port N | dev server not started, wrong port, or bound to 127.0.0.1 (step 4) |
 | has not loaded this route | check the proxy's logs (`docker logs berthlight` or `podman logs berthlight`) |
+| the proxy's certificate ... does not verify | expired or wrong domain: ask the user to run `berthlight cert` |
 
 A browser page from berthlight itself (404 "no route", 502 "did not
 answer") says the same. A 403 or "Invalid Host header" from the app is

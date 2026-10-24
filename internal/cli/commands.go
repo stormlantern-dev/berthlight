@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"stormlantern.nl/berthlight/internal/certs"
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/proxy"
@@ -22,8 +23,17 @@ import (
 	"stormlantern.nl/berthlight/internal/tui"
 )
 
+// urlFor is a route's URL: https once there is a certificate for the
+// base (R7), since the proxy then redirects plain HTTP.
 func urlFor(c Config, name string) string {
-	return "http://" + naming.Host(name, c.Bases[0]) + ":" + strconv.Itoa(c.Port)
+	return scheme(c) + "://" + naming.Host(name, c.Bases[0]) + ":" + strconv.Itoa(c.Port)
+}
+
+func scheme(c Config) string {
+	if certs.Has(c.StateDir, c.Bases[0]) {
+		return "https"
+	}
+	return "http"
 }
 
 func cmdAdd(args []string, stdout, stderr io.Writer) error {
@@ -258,7 +268,7 @@ func up(c Config, run rt.Runtime, boat *tui.Progress) error {
 		if err := route.MakeDir(c.StateDir); err != nil {
 			return err
 		}
-		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases}
+		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases, Group: run.ProxyGroup()}
 		boat.Step(0.15, "starting the proxy")
 		if err := run.StartProxy(spec); err != nil {
 			return err
@@ -368,7 +378,7 @@ func cmdURL(args []string, stdout, stderr io.Writer) error {
 // cmdProxy is the server inside the proxy container.
 func cmdProxy(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("proxy", stderr)
-	state := fs.String("state", "/state", "directory with routes.json")
+	state := fs.String("state", "/state", "directory with routes.json and the certificates")
 	port := fs.Int("port", rt.ContainerPort, "port to listen on")
 	listen := fs.String("listen", "", "listen on this address only, e.g. 127.0.0.1:7480 (default: every address the container has at start)")
 	var bases multiFlag
@@ -408,6 +418,14 @@ func cmdProxy(args []string, stdout, stderr io.Writer) error {
 		func(err error) { logger.Printf("keeping previous routes: %v", err) })
 
 	srv := &proxy.Server{Handler: h, Logf: logger.Printf}
+	// Certificates the CLI writes (R7): once one is there, HTTPS is served
+	// and plain HTTP for its names redirected.
+	go certs.Watch(ctx, *state, 500*time.Millisecond,
+		func(s *certs.Set) {
+			srv.SetCerts(s)
+			logger.Printf("%d certificate(s) loaded %v", s.Len(), s.Names())
+		},
+		func(err error) { logger.Printf("keeping previous certificates: %v", err) })
 	go func() {
 		<-ctx.Done()
 		srv.Close()

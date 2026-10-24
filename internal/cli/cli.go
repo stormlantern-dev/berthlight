@@ -40,6 +40,10 @@ type Config struct {
 	// Bases are the accepted base domains, first one used in URLs.
 	// $BERTHLIGHT_BASE, comma-separated.
 	Bases []string
+	// ACMEDir keeps what `cert` needs and the proxy must not see: the
+	// ACME account key and cert.env with the DNS credentials. Never
+	// inside StateDir, which the proxy mounts. $BERTHLIGHT_ACME_DIR.
+	ACMEDir string
 }
 
 // LoadConfig reads the configuration from the environment.
@@ -79,7 +83,33 @@ func LoadConfig() (Config, error) {
 		return c, err
 	}
 	c.StateDir = dir
+	if c.ACMEDir, err = acmeDir(); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// acmeDir is ~/.config/berthlight on Linux. Elsewhere the state directory
+// is already in the user's configuration directory, so it gets a sibling.
+func acmeDir() (string, error) {
+	if d := os.Getenv("BERTHLIGHT_ACME_DIR"); d != "" {
+		return filepath.Abs(d)
+	}
+	if goruntime.GOOS == "linux" {
+		if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+			return filepath.Join(d, "berthlight"), nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".config", "berthlight"), nil
+	}
+	d, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "berthlight-acme"), nil
 }
 
 func stateDir() (string, error) {
@@ -163,6 +193,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		"down":  cmdDown,
 		"url":   cmdURL,
 		"proxy": cmdProxy,
+		"cert":  cmdCert,
 
 		"status":       cmdStatus,
 		"devcontainer": cmdDevcontainer,
@@ -214,6 +245,9 @@ Commands:
   up                           start the proxy (add does this too)
   down                         stop the proxy
   url [--copy]                 print the URL of the current worktree's dev server
+  cert --dns <provider>        get or renew a publicly trusted wildcard certificate for
+                               your own base domain (DNS-01); then the proxy serves HTTPS
+  cert --install-timer         renew daily (systemd user timer, or launchd on macOS)
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
   demo                         play the header animation
   version                      print the version
@@ -223,7 +257,8 @@ Environment:
   BERTHLIGHT_PORT        proxy port on loopback (default 7480)
   BERTHLIGHT_BASE        base domains, comma-separated (default localhost)
   BERTHLIGHT_IMAGE       proxy image
-  BERTHLIGHT_STATE_DIR   where routes are kept
+  BERTHLIGHT_STATE_DIR   where routes and certificates are kept
+  BERTHLIGHT_ACME_DIR    the ACME account and cert.env, for cert (default ~/.config/berthlight)
   BERTHLIGHT_NO_ANIMATION  set to draw no header or progress animation (also off in CI and without a terminal)
 `)
 }

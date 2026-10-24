@@ -62,6 +62,39 @@ the tab while something is down. Piped or redirected, the output is plain
 text, and `ls --json` and `status --json` give scripts and agents a stable
 format.
 
+### HTTPS on your own domain
+
+For `https://shop.dev.example.com:7480`, with a certificate every browser
+trusts and no local CA, use a domain you control. Point
+`*.dev.example.com` at `127.0.0.1` (an `A` record, and `AAAA` `::1`) at
+your DNS provider, then get a wildcard certificate with the DNS-01
+challenge, from Let's Encrypt by default (in nushell):
+
+```nu
+$env.BERTHLIGHT_BASE = "dev.example.com,localhost"   # in your config.nu
+berthlight down; berthlight up                       # the proxy accepts the new base
+berthlight cert --dns gcloud --install-timer         # get it, and renew it daily
+```
+
+`berthlight cert` runs on the host and is the only part that sees your DNS
+credentials. It reads them as [lego](https://go-acme.github.io/lego/dns/)
+does for the provider: from the environment, or from
+`~/.config/berthlight/cert.env` (`KEY=VALUE` lines, `chmod 600`), which the
+renewal timer reads too. Built in are `gcloud` (Application Default
+Credentials, `GCE_PROJECT`, optionally `GCE_IMPERSONATE_SERVICE_ACCOUNT`),
+`cloudflare`, `route53`, `digitalocean`, `hetzner`, `dnsupdate` (RFC 2136:
+BIND, PowerDNS, Knot), and `exec` and `httpreq` for anything else. `--server
+letsencrypt-staging` tries it out first.
+
+The certificate and key go in the state directory, the key readable by you
+and the proxy only. The proxy picks them up within a second, serves HTTPS on
+the same port 7480, and redirects plain http to https for the names the
+certificate covers; `*.localhost` stays on http. `berthlight url`, `ls` and
+`status` give https URLs from then on, and `status` says when the
+certificate does not verify. A renewal starts when a third of the
+certificate's lifetime is left (`--renew-within` to change that); the timer
+is a systemd user timer on Linux and a launchd agent on macOS.
+
 Coding agents can do the wiring too. `berthlight skill install` installs a
 skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
 server settings, docs and OAuth redirect URIs around it. Add `--project` to

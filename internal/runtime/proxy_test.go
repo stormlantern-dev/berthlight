@@ -33,6 +33,17 @@ func TestRunArgs(t *testing.T) {
 	}
 }
 
+func TestRunArgsGroup(t *testing.T) {
+	s := ProxySpec{Name: "berthlight", Image: "img", HostPort: 7480, StateDir: "/s"}
+	if got := strings.Join(s.RunArgs(false, false), " "); strings.Contains(got, "--group-add") {
+		t.Errorf("group added without one: %s", got)
+	}
+	s.Group = "1000"
+	if got := strings.Join(s.RunArgs(false, false), " "); !strings.Contains(got, "--user 65532:65532 --group-add 1000 --publish") {
+		t.Errorf("group missing: %s", got)
+	}
+}
+
 func TestRunArgsGatewayPriority(t *testing.T) {
 	s := ProxySpec{Name: "berthlight", Image: "img", HostPort: 7480, StateDir: "/s"}
 	if got := strings.Join(s.RunArgs(false, true), " "); !strings.Contains(got, "--network name=berthlight,gw-priority=1000") {
