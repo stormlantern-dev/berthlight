@@ -114,6 +114,8 @@ func TestPublishes(t *testing.T) {
 	for s, want := range map[string]bool{
 		`8080`: true, `8081`: false, `"8080"`: true, `"127.0.0.1:8080:8080"`: true,
 		`"8080:3000"`: false, `"3000:8080"`: true, `"8080/tcp"`: true, `"8080/udp"`: false,
+		`"8080-8089"`: true, `"127.0.0.1:8080-8089:8080-8089"`: true, `"8070-8079"`: false,
+		`"127.0.0.1:9080-9089:8080-8089"`: true, `"8080-8089:9080-9089"`: false, `"8080-x"`: false,
 	} {
 		v, err := hujson.Parse([]byte(s))
 		if err != nil {
