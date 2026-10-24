@@ -1,0 +1,166 @@
+name: Submit the winget manifests
+description: >
+  Commit one package version's manifests to a branch of the organisation's
+  fork of microsoft/winget-pkgs, then open the pull request upstream, or,
+  without a pull request token, say where to open it by hand.
+
+# Two tokens, each with the least it needs:
+# - app-token: the release App, contents: write on the fork only. It syncs
+#   the fork and writes the branch; the commit is made through the API, so
+#   GitHub signs it as the App.
+# - pr-token: a machine user's classic token (public_repo), used for one
+#   call: creating the pull request (see .github/actions/winget-pr-token).
+#
+# Re-running the release updates the same branch, and the open pull
+# request with it.
+
+inputs:
+  manifests:
+    description: Directory holding the version's manifests.
+    required: true
+  identifier:
+    description: PackageIdentifier.
+    required: true
+  version:
+    description: PackageVersion.
+    required: true
+  app-token:
+    description: Release App token with contents write on the fork.
+    required: true
+  pr-token:
+    description: Token that opens the pull request upstream; empty to stop at the branch.
+    default: ""
+  read-token:
+    description: Token for reading upstream (the workflow's GITHUB_TOKEN will do).
+    required: true
+  fork:
+    description: The fork, owner/name.
+    default: stormlantern-dev/winget-pkgs
+  upstream:
+    description: The repository the pull request goes to, owner/name.
+    default: microsoft/winget-pkgs
+
+outputs:
+  url:
+    description: The pull request, or the page to open it from.
+    value: ${{ steps.submit.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Submit
+      id: submit
+      shell: bash
+      env:
+        DIR: ${{ inputs.manifests }}
+        ID: ${{ inputs.identifier }}
+        VERSION: ${{ inputs.version }}
+        APP_TOKEN: ${{ inputs.app-token }}
+        PR_TOKEN: ${{ inputs.pr-token }}
+        READ_TOKEN: ${{ inputs.read-token }}
+        FORK: ${{ inputs.fork }}
+        UPSTREAM: ${{ inputs.upstream }}
+      run: |
+        set -euo pipefail
+        api() {
+          local token=$1; shift
+          curl -fsS --retry 3 -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
+        }
+        gh_api="https://api.github.com/repos"
+
+        base=$(api "$READ_TOKEN" "$gh_api/$UPSTREAM" | jq -er .default_branch)
+        first=$(printf '%s' "${ID:0:1}" | tr '[:upper:]' '[:lower:]')
+        package_path="manifests/${first}/${ID//.//}"
+        dest="${package_path}/${VERSION}"
+        branch="${ID}-${VERSION}"
+
+        # Bring the fork up to date. Best effort: GitHub refuses the sync
+        # when upstream changed workflow files, which the App may not touch,
+        # and a branch from an older base still adds only these files.
+        if ! api "$APP_TOKEN" -X POST "$gh_api/$FORK/merge-upstream" -d "$(jq -cn --arg b "$base" '{branch: $b}')" > /dev/null; then
+          echo "::warning::could not sync ${FORK} with ${UPSTREAM}; branching from the fork's ${base} as it is"
+        fi
+
+        # One commit with every manifest, on top of the fork's base branch.
+        parent=$(api "$APP_TOKEN" "$gh_api/$FORK/git/ref/heads/${base}" | jq -er .object.sha)
+        base_tree=$(api "$APP_TOKEN" "$gh_api/$FORK/git/commits/${parent}" | jq -er .tree.sha)
+        entries=$(for f in "$DIR"/*.yaml; do
+          jq -cn --arg p "${dest}/$(basename "$f")" --rawfile c "$f" '{path: $p, mode: "100644", type: "blob", content: $c}'
+        done | jq -cs .)
+        tree=$(api "$APP_TOKEN" -X POST "$gh_api/$FORK/git/trees" \
+          -d "$(jq -cn --arg b "$base_tree" --argjson t "$entries" '{base_tree: $b, tree: $t}')" | jq -er .sha)
+
+        # winget-pkgs titles: "New package: X version V" or "Update: X to V".
+        if api "$READ_TOKEN" "$gh_api/$UPSTREAM/contents/${package_path}?ref=${base}" > /dev/null 2>&1; then
+          title="Update: ${ID} to ${VERSION}"
+        else
+          title="New package: ${ID} version ${VERSION}"
+        fi
+        commit=$(api "$APP_TOKEN" -X POST "$gh_api/$FORK/git/commits" \
+          -d "$(jq -cn --arg m "$title" --arg t "$tree" --arg p "$parent" '{message: $m, tree: $t, parents: [$p]}')" | jq -er .sha)
+
+        if api "$APP_TOKEN" "$gh_api/$FORK/git/ref/heads/${branch}" > /dev/null 2>&1; then
+          api "$APP_TOKEN" -X PATCH "$gh_api/$FORK/git/refs/heads/${branch}" \
+            -d "$(jq -cn --arg s "$commit" '{sha: $s, force: true}')" > /dev/null
+        else
+          api "$APP_TOKEN" -X POST "$gh_api/$FORK/git/refs" \
+            -d "$(jq -cn --arg r "refs/heads/${branch}" --arg s "$commit" '{ref: $r, sha: $s}')" > /dev/null
+        fi
+        echo "- committed ${dest} to ${FORK}@${branch} (${commit:0:12})" >> "$GITHUB_STEP_SUMMARY"
+
+        head="${FORK%%/*}:${branch}"
+        existing=$(api "$READ_TOKEN" "$gh_api/$UPSTREAM/pulls?state=open&head=${head}" | jq -r '.[0].html_url // empty')
+        if [ -n "$existing" ]; then
+          echo "- the pull request is already open and now has this commit: ${existing}" >> "$GITHUB_STEP_SUMMARY"
+          echo "url=${existing}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # The checklist of winget-pkgs' pull request template. Ticked: what
+        # the release checked (schema, winget validate and winget install in
+        # the winget-test job, no other open pull request for this branch,
+        # one manifest) and the CLA, which the machine user signs before
+        # WINGET_PR_TOKEN_SECRET is set (PRD 0001, R10), or the person who
+        # opens it by hand has signed.
+        body=$(cat <<EOF
+        ## 📖 Description
+
+        ${ID} ${VERSION}, from https://github.com/stormlantern-dev/berthlight/releases/tag/${GITHUB_REF_NAME}. Submitted by its release workflow (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
+
+        ## ✅ Checklist
+
+        - [x] Signed the [Contributor License Agreement](https://cla.opensource.microsoft.com)
+        - [ ] Linked to an issue (if applicable)
+
+        ## 📦 Manifest Checklist
+
+        - [x] Checked that there aren't other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) for the same manifest update/change
+        - [x] This PR only modifies one (1) manifest
+        - [x] Validated manifest locally with \`winget validate --manifest <path>\` ([validation guide](https://github.com/microsoft/winget-pkgs/blob/master/doc/ValidationFailureGuide.md))
+        - [x] Tested manifest locally with \`winget install --manifest <path>\`
+        - [x] Manifest conforms to the [1.12 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.12.0)
+        EOF
+        )
+
+        if [ -z "$PR_TOKEN" ]; then
+          q=$(jq -rn --arg t "$title" '$t | @uri')
+          url="https://github.com/${UPSTREAM}/compare/${base}...${FORK/\//:}:${branch}?expand=1&title=${q}"
+          {
+            echo "- no pull request token (WINGET_PR_TOKEN_SECRET): open the pull request by hand: ${url}"
+            echo
+            echo '```markdown'
+            printf '%s\n' "$body"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::open the winget pull request by hand: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        url=$(api "$PR_TOKEN" -X POST "$gh_api/$UPSTREAM/pulls" \
+          -d "$(jq -cn --arg t "$title" --arg h "$head" --arg b "$base" --arg body "$body" \
+                '{title: $t, head: $h, base: $b, body: $body, maintainer_can_modify: false}')" \
+          | jq -er .html_url)
+        echo "- opened ${url}" >> "$GITHUB_STEP_SUMMARY"
+        echo "url=${url}" >> "$GITHUB_OUTPUT"

@@ -8,6 +8,7 @@
 #   ./scripts/gcp-release.nu setup            # APIs, WIF pool and provider, keyring, import-only App key, AUR SSH key, bindings
 #   ./scripts/gcp-release.nu import <pem>     # OPERATOR: import a key generated on the release App, then delete the .pem
 #   ./scripts/gcp-release.nu aur-public-key   # the AUR SSH public key, for the AUR account
+#   ./scripts/gcp-release.nu winget-token     # OPERATOR: store the winget machine user's token (prompts, no echo)
 #   ./scripts/gcp-release.nu fingerprint      # GitHub-style fingerprint of the KMS public key(s)
 #   ./scripts/gcp-release.nu status           # print what exists, change nothing
 #
@@ -22,6 +23,13 @@
 # and never exists anywhere else: ssh signs with it through Google's PKCS#11
 # library, kmsp11 (.github/actions/aur-ssh). It has a key ring of its own,
 # because kmsp11 offers every key in the ring it is given.
+#
+# winget (R10) needs one bearer token after all: opening a pull request on
+# microsoft/winget-pkgs takes a user's classic token (public_repo), because
+# an App can only act where it is installed
+# (.github/actions/winget-pr-token). It belongs to a machine user that owns
+# nothing, and lives in Secret Manager as winget-pr-token, readable by the
+# same WIF principal set and nothing else.
 #
 # Nothing else: no service account, no project-wide role.
 #
@@ -38,6 +46,10 @@
 # To replace it anyway, add a key version, put its public key on the AUR
 # account next to the old one, verify, then remove the old public key and
 # disable the old version (kmsp11 offers every enabled version).
+# winget token: create a new classic token on the machine user, run
+# `winget-token` (a new secret VERSION; WINGET_PR_TOKEN_SECRET names
+# versions/latest), run verify-release-credentials.yml, then delete the old
+# token on GitHub and disable the old version here.
 
 const PROJECT = "stormlantern-release"
 const PROJECT_NUMBER = "369937005182"
@@ -48,6 +60,7 @@ const ALGORITHM = "rsa-sign-pkcs1-2048-sha256"  # RS256, what GitHub signs and v
 const AUR_KEYRING = "aur-ssh"
 const AUR_KEY = "aur"
 const AUR_ALGORITHM = "ec-sign-p256-sha256"  # ecdsa-sha2-nistp256 in SSH; kmsp11 signs it with CKM_ECDSA
+const WINGET_SECRET = "winget-pr-token"
 
 const GH_POOL = "github-actions"
 const GH_PROVIDER = "berthlight"
@@ -59,7 +72,7 @@ const GH_OWNER_ID = "346862075"
 const GH_WORKFLOWS = "stormlantern-dev/berthlight/.github/workflows"
 
 def main [] {
-  print "usage: gcp-release.nu <setup|import <pem>|aur-public-key|fingerprint|status>"
+  print "usage: gcp-release.nu <setup|import <pem>|aur-public-key|winget-token|fingerprint|status>"
 }
 
 def --wrapped exists [...args: string] {
@@ -100,7 +113,7 @@ def condition [] {
 
 def "main setup" [] {
   (^gcloud services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
-    cloudkms.googleapis.com --project $PROJECT)
+    cloudkms.googleapis.com secretmanager.googleapis.com --project $PROJECT)
 
   if not (exists iam workload-identity-pools describe $GH_POOL --location global) {
     print $"create pool ($GH_POOL)"
@@ -160,11 +173,23 @@ def "main setup" [] {
   (^gcloud kms keys add-iam-policy-binding $AUR_KEY ...(aur-args) --project $PROJECT
     --role roles/cloudkms.signerVerifier --member (member) --format none)
 
+  # Created empty: the operator adds the token (`winget-token`).
+  if not (exists secrets describe $WINGET_SECRET) {
+    print $"create secret ($WINGET_SECRET)"
+    (^gcloud secrets create $WINGET_SECRET --project $PROJECT
+      --replication-policy user-managed --locations $LOCATION)
+  }
+  # Accessor on the SECRET only.
+  print $"accessor: repository_id ($GH_REPOSITORY_ID) on secret ($WINGET_SECRET)"
+  (^gcloud secrets add-iam-policy-binding $WINGET_SECRET --project $PROJECT
+    --role roles/secretmanager.secretAccessor --member (member) --format none)
+
   print ""
   print "berthlight repository variables:"
   print $"  TAP_WIF_PROVIDER       = (provider-name)"
   print $"  TAP_KMS_KEY_VERSION    = projects/($PROJECT)/locations/($LOCATION)/keyRings/($KEYRING)/cryptoKeys/($KEY)/cryptoKeyVersions/<n>   \(after import)"
   print $"  AUR_KMS_KEY_RING       = projects/($PROJECT)/locations/($LOCATION)/keyRings/($AUR_KEYRING)"
+  print $"  WINGET_PR_TOKEN_SECRET = projects/($PROJECT)/secrets/($WINGET_SECRET)/versions/latest   \(after winget-token)"
   print ""
   print "AUR account public key (Account → SSH Public Key):"
   print $"  (aur-public-key)"
@@ -211,6 +236,21 @@ def "main import" [pem: path] {
   print "If they match: delete the .pem, set TAP_KMS_KEY_VERSION, run verify-release-credentials.yml."
 }
 
+# OPERATOR ONLY: credential material. Stores the winget machine user's
+# classic token (scope public_repo, nothing else) as a new version of the
+# secret. It is read from the terminal without echo and goes to gcloud on
+# stdin: never into a file, an argument or the shell history.
+def "main winget-token" [] {
+  let token = (input -s "classic token of the winget machine user (public_repo): " | str trim)
+  print ""
+  if ($token | is-empty) { error make { msg: "no token given" } }
+  if not ($token | str starts-with "ghp_") {
+    error make { msg: "not a classic personal access token (ghp_...): fine-grained tokens cannot open the pull request" }
+  }
+  $token | ^gcloud secrets versions add $WINGET_SECRET --project $PROJECT --data-file=- --format "value(name)"
+  print "Set WINGET_PR_TOKEN_SECRET if it is not set, then run verify-release-credentials.yml."
+}
+
 # The AUR key's public half in OpenSSH format, for the AUR account.
 def aur-public-key [] {
   let pem = (^gcloud kms keys versions get-public-key 1 ...(aur-args) --project $PROJECT --key $AUR_KEY)
@@ -253,6 +293,14 @@ def "main status" [] {
     for b in ($policy | get -o bindings | default []) { print $"  ($b.role): ($b.members | str join ', ')" }
   } else {
     print $"key ($KEY): false"
+  }
+  if (exists secrets describe $WINGET_SECRET) {
+    let versions = (^gcloud secrets versions list $WINGET_SECRET --project $PROJECT --filter "state=ENABLED" --format "value(name)" | lines)
+    print $"secret ($WINGET_SECRET): ($versions | length) enabled version\(s)"
+    let policy = (^gcloud secrets get-iam-policy $WINGET_SECRET --project $PROJECT --format json | from json)
+    for b in ($policy | get -o bindings | default []) { print $"  ($b.role): ($b.members | str join ', ')" }
+  } else {
+    print $"secret ($WINGET_SECRET): false"
   }
   if (exists kms keys describe $AUR_KEY ...(aur-args)) {
     print $"key ($AUR_KEYRING)/($AUR_KEY): (aur-public-key)"

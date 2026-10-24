@@ -33,6 +33,13 @@ release has checksums signed with cosign and GitHub build provenance; the
 release notes say how to verify them. The proxy image,
 `ghcr.io/stormlantern-dev/berthlight:<version>`, is signed the same way.
 
+winget is on its way: `winget install Stormlantern.Berthlight` works once
+the package is accepted in
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Until then,
+use Scoop. Releases test the manifests with `winget validate` and
+`winget install` before submitting them; the PRD (R10) says how they are
+submitted and which credentials that takes.
+
 ## Use
 
 Wire a project's devcontainer once, in its main worktree:

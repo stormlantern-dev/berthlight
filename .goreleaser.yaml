@@ -107,8 +107,10 @@ scoops:
 
 # winget (PRD 0001, R10). GoReleaser only WRITES the manifests here, to
 # dist/winget, on every release and every snapshot; CI validates them
-# against the winget schemas (scripts/winget-validate.sh). The winget job in
-# release.yml submits them to microsoft/winget-pkgs, in a job of its own:
+# against the winget schemas (.github/actions/winget-schema) and with
+# `winget validate`. The winget jobs in release.yml test them with
+# `winget install` and submit them to microsoft/winget-pkgs, in jobs of
+# their own:
 #
 # - a pull request upstream needs a user's token, because an App
 #   installation token only reaches repositories the App is installed on;
