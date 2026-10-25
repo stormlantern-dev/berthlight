@@ -97,6 +97,74 @@ jobs:
       - name: Integration tests
         run: go test -tags integration -count=1 -v -timeout 15m ./test/integration
 
+  # Shell completion (#36): each shell's script parses, and the nushell
+  # completer answers through `berthlight __complete`. Not a required check.
+  completion:
+    name: completion scripts
+    runs-on: ubuntu-latest
+    env:
+      NU_VERSION: 0.116.1
+      NU_SHA256: d6d8ace4be491ed8abba4026e73b60c0470b4671d7039307e7d772282ef863da
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install zsh and fish
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh fish
+      - name: Install nushell
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/nu.tar.gz" "https://github.com/nushell/nushell/releases/download/$NU_VERSION/nu-$NU_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$NU_SHA256  $RUNNER_TEMP/nu.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/nu.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nu-$NU_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+      - name: Build berthlight
+        run: |
+          go build -o "$RUNNER_TEMP/bin/berthlight" ./cmd/berthlight
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Generate the scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/completions"
+          cd "$RUNNER_TEMP/completions"
+          berthlight completion bash > berthlight.bash
+          berthlight completion zsh > _berthlight
+          berthlight completion fish > berthlight.fish
+          berthlight completion powershell > berthlight.ps1
+          berthlight completion nushell > berthlight.nu
+      - name: bash -n
+        run: bash -n "$RUNNER_TEMP/completions/berthlight.bash"
+      - name: zsh -n
+        run: zsh -n "$RUNNER_TEMP/completions/_berthlight"
+      - name: fish -n
+        run: fish -n "$RUNNER_TEMP/completions/berthlight.fish"
+      - name: PowerShell parses it
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$env:RUNNER_TEMP/completions/berthlight.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+      - name: nushell parses it, and the completer answers
+        env:
+          BERTHLIGHT_STATE_DIR: ${{ runner.temp }}/state
+        run: |
+          mkdir -p "$BERTHLIGHT_STATE_DIR"
+          echo '{"routes": [{"name": "shop", "target": "web", "port": 8080}]}' > "$BERTHLIGHT_STATE_DIR/routes.json"
+          cp "$RUNNER_TEMP/completions/berthlight.nu" berthlight-completion.nu
+          nu --no-config-file -c '
+            source berthlight-completion.nu
+            let c = $env.config.completions.external.completer
+            let rm = (do $c [berthlight rm ""] | get value)
+            if $rm != [shop] { error make {msg: $"rm completes ($rm | to nuon), not [shop]"} }
+            let sub = (do $c [berthlight sta] | get value)
+            if $sub != [status] { error make {msg: $"sta completes ($sub | to nuon), not [status]"} }
+            if (do $c [git ""]) != null { error make {msg: "the completer answers for git"} }
+            print "nushell completer ok"
+          '
+
   # R11: the release configuration builds on every pull request, images
   # included, without publishing or signing anything.
   release-snapshot:
@@ -124,6 +192,19 @@ jobs:
         run: |
           sudo dpkg -i dist/berthlight_*_amd64.deb
           berthlight version
+          # Shell completion, where each shell looks for it (#36).
+          for f in /usr/share/bash-completion/completions/berthlight /usr/share/zsh/site-functions/_berthlight \
+            /usr/share/fish/vendor_completions.d/berthlight.fish /usr/share/nushell/vendor/autoload/berthlight.nu; do
+            test -s "$f" || { echo "::error::the deb lacks $f"; exit 1; }
+          done
+          command -v bsdtar || { sudo apt-get update && sudo apt-get install -y --no-install-recommends libarchive-tools; }
+          for p in dist/*.rpm dist/*.apk; do
+            bsdtar -tf "$p" | grep -q 'usr/share/zsh/site-functions/_berthlight' || { echo "::error::$p lacks the zsh completion"; exit 1; }
+          done
+          for a in dist/berthlight_*.tar.gz dist/berthlight_*.zip; do
+            bsdtar -tf "$a" | grep -q '^completions/berthlight.bash$' || { echo "::error::$a lacks the completions"; exit 1; }
+          done
+          grep -q 'zsh_completion "completions/_berthlight"' dist/homebrew/Casks/berthlight.rb
           docker run --rm --entrypoint /berthlight "$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/stormlantern-dev/berthlight | grep amd64 | head -1)" version
       # R10: the winget manifests a release would submit.
       - name: Find the winget manifests

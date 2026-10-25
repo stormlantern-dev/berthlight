@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"stormlantern.nl/berthlight/internal/certs"
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/naming"
@@ -36,22 +37,66 @@ func scheme(c Config) string {
 	return "http"
 }
 
-func cmdAdd(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("add", stderr)
-	target := fs.String("target", "", "container network alias (default: the name)")
-	network := fs.String("network", "", "the route's container network, starting with bl- (default: bl-<name>)")
-	project := fs.String("project", "", "project name, when the name comes from the worktree (default: the main worktree's directory name)")
-	dir := fs.String("C", ".", "directory inside the worktree, when the name comes from the worktree")
-	replace := fs.Bool("replace", false, "take over a name another route holds")
-	pos, err := parseInterspersed(fs, args)
-	if err != nil {
-		return errUsage
+type addOptions struct {
+	target, network, project, dir string
+	replace                       bool
+}
+
+func newAddCmd() *cobra.Command {
+	var o addOptions
+	cmd := &cobra.Command{
+		Use:   "add [<name>] <port>",
+		Short: "Route <name>.localhost to a container's port",
+		Long: `add routes http://<name>.localhost:7480 to <port> on a container, over the
+route's own container network, bl-<name> by default. It creates the
+network, starts the proxy if it is not running, and joins the proxy to the
+network. Then it prints the network and the alias the container must join
+with: --network bl-<name> --network-alias <name>.
+
+Without <name>, the name is the current git worktree's: the project name
+(--project, default the main worktree's directory name), with the
+worktree's suffix for any other worktree, such as shop-fix-login for
+../webshop-fix-login. The initializeCommand that 'berthlight devcontainer'
+writes runs add this way, so a wired devcontainer needs no add by hand.
+
+A route owns its name, network and alias. add refuses one that another
+route holds, and says which; --replace takes a name over.`,
+		Example: `  # shop.localhost -> port 8080 of the container with alias shop on network bl-shop
+  berthlight add shop 8080
+
+  # the container answers to another alias, on a network of its own choosing
+  berthlight add shop 8080 --target web --network bl-webshop
+
+  # what a wired devcontainer's initializeCommand runs, for the worktree in ~/src/webshop
+  berthlight add --project shop --target bl-webshop --network bl-webshop -C ~/src/webshop 8080`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAdd(o, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
-	var name, portArg string
+	f := cmd.Flags()
+	f.StringVar(&o.target, "target", "", "container network alias (default: the name)")
+	f.StringVar(&o.network, "network", "", "the route's container network, starting with bl- (default: bl-<name>)")
+	f.StringVar(&o.project, "project", "", "project name, when the name comes from the worktree (default: the main worktree's directory name)")
+	f.StringVarP(&o.dir, "dir", "C", ".", "directory inside the worktree, when the name comes from the worktree")
+	f.BoolVar(&o.replace, "replace", false, "take over a name another route holds")
+	cmd.MarkFlagDirname("dir")
+	for _, name := range []string{"target", "network", "project"} {
+		cmd.RegisterFlagCompletionFunc(name, cobra.NoFileCompletions)
+	}
+	return cmd
+}
+
+func runAdd(o addOptions, pos []string, stdout, stderr io.Writer) error {
+	var (
+		name, portArg string
+		err           error
+	)
 	switch len(pos) {
 	case 1:
 		portArg = pos[0]
-		if name, err = naming.LabelFor(*dir, *project); err != nil {
+		if name, err = naming.LabelFor(o.dir, o.project); err != nil {
 			return fmt.Errorf("deriving the name from the worktree: %w", err)
 		}
 	case 2:
@@ -65,9 +110,9 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("port %q is not a number", portArg)
 	}
-	r := route.Route{Name: name, Target: name, Port: port, NetworkName: *network}
-	if *target != "" {
-		r.Target = *target
+	r := route.Route{Name: name, Target: name, Port: port, NetworkName: o.network}
+	if o.target != "" {
+		r.Target = o.target
 	}
 	if r.NetworkName == route.NetworkName(r.Name) {
 		r.NetworkName = ""
@@ -87,7 +132,7 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	old, exists := tab.Lookup(r.Name)
-	if exists && !old.SameOwner(r) && !*replace {
+	if exists && !old.SameOwner(r) && !o.replace {
 		return fmt.Errorf("route %q already goes to %s on network %s; to take the name over, add --replace", r.Name, old.Addr(), old.Network())
 	}
 	run, err := rt.Detect()
@@ -124,16 +169,30 @@ func cmdAdd(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func cmdRm(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("rm", stderr)
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+func newRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Remove a route",
+		Long: `rm removes a route: the name stops answering, the proxy leaves the route's
+network, and the network goes too once no container uses it. The dev
+server's container keeps running; stop it the usual way.
+
+A wired devcontainer adds its route again when it starts.`,
+		Example: `  berthlight rm shop
+  berthlight rm shop-fix-login   # after removing the worktree`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeRoutes,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				fmt.Fprintln(cmd.ErrOrStderr(), "usage: berthlight rm <name>")
+				return errUsage
+			}
+			return runRm(args[0], cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
-	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: berthlight rm <name>")
-		return errUsage
-	}
-	name := fs.Arg(0)
+}
+
+func runRm(name string, stdout, stderr io.Writer) error {
 	c, err := LoadConfig()
 	if err != nil {
 		return err
@@ -190,12 +249,32 @@ func removeRoute(c Config, run rt.Runtime, tab *route.Table, r route.Route, stde
 	return nil
 }
 
-func cmdLs(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("ls", stderr)
-	asJSON := fs.Bool("json", false, "print the routes as JSON")
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+func newLsCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "ls",
+		Short: "List routes",
+		Long: `ls lists the routes: each name, its URL, the container alias and port it
+goes to, and its network. It reads the routes and checks nothing; status
+checks that each one answers.
+
+--json prints the same as JSON, for scripts and agents: an object with a
+"routes" list, each with name, url, target, port and network. Those field
+names stay.`,
+		Example: `  berthlight ls
+  berthlight ls --json`,
+		// Go's flag package let extra arguments pass; so does ls.
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLs(asJSON, cmd.OutOrStdout())
+		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the routes as JSON")
+	return cmd
+}
+
+func runLs(asJSON bool, stdout io.Writer) error {
 	c, err := LoadConfig()
 	if err != nil {
 		return err
@@ -204,7 +283,7 @@ func cmdLs(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *asJSON {
+	if asJSON {
 		out := struct {
 			Routes []routeJSON `json:"routes"`
 		}{Routes: []routeJSON{}}
@@ -226,11 +305,30 @@ func cmdLs(args []string, stdout, stderr io.Writer) error {
 	return tui.Table(stdout, rows)
 }
 
-func cmdUp(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("up", stderr)
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+func newUpCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "up",
+		Short: "Start the proxy",
+		Long: `up starts the proxy container, listening on 127.0.0.1 only, and joins it
+to every route's network. A proxy that is already running stays, and joins
+any network it is missing. add starts the proxy too, so up is for after a
+reboot, after 'berthlight down', or when status says the proxy is gone.
+
+The port is BERTHLIGHT_PORT (default 7480); the container is named
+BERTHLIGHT_PROXY_NAME (default berthlight). To change either, or
+BERTHLIGHT_BASE, run 'berthlight down' first: a running proxy keeps what it
+started with.`,
+		Example: `  berthlight up
+  berthlight down; berthlight up   # restart, e.g. after changing BERTHLIGHT_BASE`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUp(cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
+}
+
+func runUp(stdout, stderr io.Writer) error {
 	c, err := LoadConfig()
 	if err != nil {
 		return err
@@ -310,11 +408,24 @@ func waitForPort(port int, timeout time.Duration) error {
 	}
 }
 
-func cmdDown(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("down", stderr)
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+func newDownCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "down",
+		Short: "Stop the proxy",
+		Long: `down stops and removes the proxy container. The routes stay, as do their
+networks and the dev servers' containers: 'berthlight up', or the next
+add, brings every route back.`,
+		Example: `  berthlight down
+  berthlight down; berthlight up   # restart the proxy`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDown(cmd.OutOrStdout())
+		},
 	}
+}
+
+func runDown(stdout io.Writer) error {
 	c, err := LoadConfig()
 	if err != nil {
 		return err
@@ -330,37 +441,74 @@ func cmdDown(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func cmdURL(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("url", stderr)
-	project := fs.String("project", "", "project name (default: the one in the worktree's devcontainer.json, else the main worktree's directory name)")
-	base := fs.String("base", "", "base domain (default: the first of $BERTHLIGHT_BASE, or localhost)")
-	port := fs.Int("port", 0, "proxy port (default: $BERTHLIGHT_PORT, or 7480)")
-	dir := fs.String("C", ".", "directory inside the worktree")
-	cp := fs.Bool("copy", false, "also put the URL on the clipboard, through the terminal (OSC 52)")
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+type urlOptions struct {
+	project, base, dir string
+	port               int
+	copy               bool
+}
+
+func newURLCmd() *cobra.Command {
+	var o urlOptions
+	cmd := &cobra.Command{
+		Use:   "url",
+		Short: "Print the URL of the current worktree's dev server",
+		Long: `url prints the URL the current git worktree's dev server has, or will have,
+behind berthlight: the same name the worktree's devcontainer registers.
+It works the name out from the worktree alone and checks nothing, so it is
+fast enough for scripts, shell prompts and .env files.
+
+The project name is the one the worktree's devcontainer.json gives
+berthlight, if 'berthlight devcontainer' wired it; else the main
+worktree's directory name. The URL is https once 'berthlight cert' got a
+certificate for the base domain.
+
+--copy also puts the URL on the clipboard, through the terminal (OSC 52),
+which works over SSH and inside a container too.`,
+		Example: `  berthlight url
+  berthlight url --copy
+  berthlight url -C ../webshop-fix-login   # another worktree's URL
+  start (berthlight url)                   # nushell: open it in the browser`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runURL(o, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&o.project, "project", "", "project name (default: the one in the worktree's devcontainer.json, else the main worktree's directory name)")
+	f.StringVar(&o.base, "base", "", "base domain (default: the first of $BERTHLIGHT_BASE, or localhost)")
+	f.IntVar(&o.port, "port", 0, "proxy port (default: $BERTHLIGHT_PORT, or 7480)")
+	f.StringVarP(&o.dir, "dir", "C", ".", "directory inside the worktree")
+	f.BoolVar(&o.copy, "copy", false, "also put the URL on the clipboard, through the terminal (OSC 52)")
+	cmd.MarkFlagDirname("dir")
+	cmd.RegisterFlagCompletionFunc("base", completeBases)
+	cmd.RegisterFlagCompletionFunc("project", cobra.NoFileCompletions)
+	cmd.RegisterFlagCompletionFunc("port", cobra.NoFileCompletions)
+	return cmd
+}
+
+func runURL(o urlOptions, stdout, stderr io.Writer) error {
 	c, err := LoadConfig()
 	if err != nil {
 		return err
 	}
-	if *base != "" {
-		c.Bases = []string{*base}
+	if o.base != "" {
+		c.Bases = []string{o.base}
 	}
-	if *port != 0 {
-		c.Port = *port
+	if o.port != 0 {
+		c.Port = o.port
 	}
-	if *project == "" {
-		*project = wiredProject(*dir)
+	if o.project == "" {
+		o.project = wiredProject(o.dir)
 	}
-	label, err := naming.LabelFor(*dir, *project)
+	label, err := naming.LabelFor(o.dir, o.project)
 	if err != nil {
 		return err
 	}
 	u := urlFor(c, label)
 	out := tui.NewTerm(stdout)
 	fmt.Fprintln(stdout, out.Link(u, u))
-	if *cp {
+	if o.copy {
 		// The clipboard sequence goes to whichever stream is the terminal,
 		// so `berthlight url --copy > file` still copies.
 		term := out
@@ -375,32 +523,55 @@ func cmdURL(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// cmdProxy is the server inside the proxy container.
-func cmdProxy(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("proxy", stderr)
-	state := fs.String("state", "/state", "directory with routes.json and the certificates")
-	port := fs.Int("port", rt.ContainerPort, "port to listen on")
-	listen := fs.String("listen", "", "listen on this address only, e.g. 127.0.0.1:7480 (default: every address the container has at start)")
-	var bases multiFlag
-	fs.Var(&bases, "base", "accepted base domain (repeatable; default localhost)")
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+type proxyOptions struct {
+	state, listen string
+	port          int
+	bases         []string
+}
+
+// newProxyCmd is the server inside the proxy container; hidden, since
+// berthlight up starts it.
+func newProxyCmd() *cobra.Command {
+	var o proxyOptions
+	cmd := &cobra.Command{
+		Use:   "proxy",
+		Short: "Run the proxy server (inside the proxy container)",
+		Long: `proxy is the server in the proxy container, which 'berthlight up' starts.
+It routes requests by host name to the routes in <state>/routes.json and
+serves the certificates there, reloading both when they change.`,
+		Example:           `  berthlight proxy --state /state --port 7480 --base localhost`,
+		Hidden:            true,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProxy(o, cmd.ErrOrStderr())
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&o.state, "state", "/state", "directory with routes.json and the certificates")
+	f.IntVar(&o.port, "port", rt.ContainerPort, "port to listen on")
+	f.StringVar(&o.listen, "listen", "", "listen on this address only, e.g. 127.0.0.1:7480 (default: every address the container has at start)")
+	f.StringArrayVar(&o.bases, "base", nil, "accepted base domain (repeatable; default localhost)")
+	cmd.MarkFlagDirname("state")
+	return cmd
+}
+
+func runProxy(o proxyOptions, stderr io.Writer) error {
 	logger := log.New(stderr, "berthlight proxy: ", log.LstdFlags)
 
-	h := proxy.NewHandler(bases...)
+	h := proxy.NewHandler(o.bases...)
 	h.Logf = logger.Printf
 
 	var ls []net.Listener
-	if *listen != "" {
-		l, err := net.Listen("tcp", *listen)
+	if o.listen != "" {
+		l, err := net.Listen("tcp", o.listen)
 		if err != nil {
 			return err
 		}
 		ls = []net.Listener{l}
 	} else {
 		var err error
-		if ls, err = proxy.ListenStartupInterfaces(*port); err != nil {
+		if ls, err = proxy.ListenStartupInterfaces(o.port); err != nil {
 			return err
 		}
 	}
@@ -410,7 +581,7 @@ func cmdProxy(args []string, stdout, stderr io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go route.Watch(ctx, *state, 500*time.Millisecond,
+	go route.Watch(ctx, o.state, 500*time.Millisecond,
 		func(t *route.Table) {
 			h.SetTable(t)
 			logger.Printf("%d route(s) loaded", len(t.Routes))
@@ -420,7 +591,7 @@ func cmdProxy(args []string, stdout, stderr io.Writer) error {
 	srv := &proxy.Server{Handler: h, Logf: logger.Printf}
 	// Certificates the CLI writes (R7): once one is there, HTTPS is served
 	// and plain HTTP for its names redirected.
-	go certs.Watch(ctx, *state, 500*time.Millisecond,
+	go certs.Watch(ctx, o.state, 500*time.Millisecond,
 		func(s *certs.Set) {
 			srv.SetCerts(s)
 			logger.Printf("%d certificate(s) loaded %v", s.Len(), s.Names())
@@ -435,11 +606,6 @@ func cmdProxy(args []string, stdout, stderr io.Writer) error {
 	}()
 	return srv.Serve(ls...)
 }
-
-type multiFlag []string
-
-func (m *multiFlag) String() string     { return fmt.Sprint([]string(*m)) }
-func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 // wiredProject is the project name the worktree's devcontainer.json gives
 // berthlight, if `berthlight devcontainer` wired it, so url names the same

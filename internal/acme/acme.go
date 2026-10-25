@@ -193,6 +193,9 @@ func Ensure(ctx context.Context, o Options) (Result, error) {
 	return Result{Obtained: true, NotAfter: c.NotAfter, RenewAt: Due(c, o.RenewWithin)}, nil
 }
 
+// ServerCodes lists the CAs lego knows by name, for Options.Server.
+func ServerCodes() []string { return lego.GetAllCodes() }
+
 func serverURL(s string) (string, error) {
 	if s == "" {
 		return DefaultServer, nil
