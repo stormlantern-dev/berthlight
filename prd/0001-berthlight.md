@@ -467,6 +467,13 @@ the tracking issue.
 - **308 for the HTTP to HTTPS redirect** (R2, R7): it keeps the method and
   body, so a form posted to an `http` URL still arrives. Decided by the
   operator, 2026-10-24.
+- **Git inside a worktree's devcontainer through the Dev Container CLI**
+  (R5, #35): worktrees with relative paths (`worktree.useRelativePaths`,
+  git 2.48+) and `devcontainer up --mount-git-worktree-common-dir`, which
+  mounts the repository's git directory beside the worktree. berthlight
+  does not mount it itself: the path is machine-specific and
+  `devcontainer.json` is committed. `berthlight devcontainer` points out
+  what is missing. Decided by the operator, 2026-10-25.
 
 ## Open questions
 
