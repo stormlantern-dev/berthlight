@@ -57,6 +57,22 @@ starts. Each worktree gets its own name: `shop.localhost` for the main
 worktree, `shop-fix-login.localhost` for a worktree in `webshop-fix-login`.
 The dev server must listen on `0.0.0.0` inside the container.
 
+Give every worktree its own devcontainer. For git to work inside one, the
+worktree must point at the repository with a relative path, and the
+container needs the repository's git directory beside it:
+
+```sh
+git config --global worktree.useRelativePaths true   # once; git 2.48+
+git worktree add ../webshop-fix-login
+devcontainer up --workspace-folder ../webshop-fix-login --mount-git-worktree-common-dir
+```
+
+`git worktree repair --relative-paths` converts existing worktrees.
+`devcontainer exec` needs the same flag. A `workspaceMount` in
+`devcontainer.json` turns the flag off
+([devcontainers/cli#1243](https://github.com/devcontainers/cli/issues/1243)).
+`berthlight devcontainer` points out what is missing.
+
 ```sh
 berthlight url              # this worktree's URL (--copy puts it on the clipboard)
 berthlight status           # the proxy and every route, and what is wrong if anything is

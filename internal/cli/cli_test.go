@@ -488,3 +488,28 @@ func TestURLUsesWiredProject(t *testing.T) {
 		t.Errorf("--project does not win: %q", out.String())
 	}
 }
+
+// TestDevcontainerWorktreeAdvice: wiring says what git inside a worktree's
+// container needs, and warns about a workspaceMount.
+func TestDevcontainerWorktreeAdvice(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".devcontainer"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".devcontainer", "devcontainer.json"), []byte(`{"image": "x", "workspaceMount": "source=${localWorkspaceFolder},target=/w,type=bind"}`), 0o644)
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	var out bytes.Buffer
+	if code := Run([]string{"devcontainer", "-C", dir, "shop", "8080"}, &out, &out); code != 0 {
+		t.Fatalf("%d %s", code, out.String())
+	}
+	for _, want := range []string{"workspaceMount", "devcontainers/cli#1243", "worktree.useRelativePaths true", "--mount-git-worktree-common-dir"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

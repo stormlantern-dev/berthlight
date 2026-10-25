@@ -142,3 +142,10 @@ func TestProject(t *testing.T) {
 		}
 	}
 }
+
+func TestHas(t *testing.T) {
+	src := []byte("{\n  // c\n  \"workspaceMount\": \"source=x,target=/w,type=bind\",\n  \"image\": \"x\"\n}")
+	if !Has(src, "workspaceMount") || Has(src, "mounts") || Has([]byte("nope"), "image") {
+		t.Error("Has")
+	}
+}

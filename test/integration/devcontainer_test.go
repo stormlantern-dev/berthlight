@@ -86,7 +86,14 @@ func TestRealDevcontainer(t *testing.T) {
 	git("add", "-A")
 	git("commit", "-q", "-m", "devcontainer")
 	fix := mainDir + "-fix-login"
-	git("worktree", "add", "-q", fix)
+	// A relative path lets the second worktree's container reach the
+	// repository's git directory (--mount-git-worktree-common-dir below).
+	relative := gitHasRelativeWorktrees()
+	if relative {
+		git("worktree", "add", "-q", "--relative-paths", fix)
+	} else {
+		git("worktree", "add", "-q", fix)
+	}
 
 	// Remove the devcontainers before the networks they are on.
 	t.Cleanup(func() {
@@ -98,7 +105,7 @@ func TestRealDevcontainer(t *testing.T) {
 		}
 	})
 	for _, dir := range []string{mainDir, fix} {
-		cmd := exec.Command(dcBin, "up", "--workspace-folder", dir, "--docker-path", e.run.Bin)
+		cmd := exec.Command(dcBin, "up", "--workspace-folder", dir, "--docker-path", e.run.Bin, "--mount-git-worktree-common-dir")
 		var log bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &log, &log
 		if err := cmd.Run(); err != nil || !strings.Contains(log.String(), `"outcome":"success"`) {
@@ -112,8 +119,30 @@ func TestRealDevcontainer(t *testing.T) {
 		e.waitBody(project+".localhost", filepath.Base(mainDir), 15*time.Second)
 		e.waitBody(project+"-fix-login.localhost", filepath.Base(fix), 15*time.Second)
 	}
+	// Git works inside the second worktree's container: its .git file's
+	// gitdir resolves there (busybox has no git, so check the path).
+	if relative {
+		ids, _ := e.run.Run("ps", "-q", "--filter", "label=devcontainer.local_folder="+fix)
+		id := strings.Fields(ids)
+		if len(id) == 0 {
+			t.Fatal("no container for the second worktree")
+		}
+		out, err := e.run.Run("exec", id[0], "sh", "-c", `cd "$(dirname "$(find /workspaces -maxdepth 2 -name .git -type f | head -1)")" && test -f "$(sed 's/^gitdir: //' .git)/HEAD" && echo resolves`)
+		if err != nil || !strings.Contains(out, "resolves") {
+			t.Errorf("gitdir does not resolve in the worktree's container: %v %s", err, out)
+		}
+	} else {
+		t.Log("git without worktree --relative-paths: not checking git inside the container")
+	}
 	e.waitStatus("ok, HTTP 200", 0)
 	if _, s := e.status(); strings.Count(s, "ok, HTTP 200") != 2 {
 		t.Errorf("status:\n%s", s)
 	}
+}
+
+// gitHasRelativeWorktrees reports whether git can add worktrees with
+// relative paths (2.48+).
+func gitHasRelativeWorktrees() bool {
+	out, _ := exec.Command("git", "worktree", "add", "-h").CombinedOutput()
+	return strings.Contains(string(out), "relative-paths")
 }
