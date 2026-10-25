@@ -76,6 +76,24 @@ directory name, never its branch.
    status` checks the proxy and every route and exits 1 when something is
    wrong. Open the URL.
 
+## Worktrees
+
+Each worktree runs its own devcontainer. Git works inside it only when the
+worktree points at the repository with a relative path and the container
+mounts the repository's git directory:
+
+- Create worktrees with `git worktree add --relative-paths ...`, or set
+  `git config worktree.useRelativePaths true` once (git 2.48+). Convert
+  existing ones with `git worktree repair --relative-paths`.
+- Start and enter the container with `--mount-git-worktree-common-dir`:
+  `devcontainer up --workspace-folder <worktree> --mount-git-worktree-common-dir`,
+  and the same flag on `devcontainer exec`.
+- Without that, git inside the container fails with "gitdir does not point
+  to a valid repository", and so do tools that call git (`gh auth
+  setup-git`, `go build`'s VCS stamping). Run git on the host meanwhile.
+- A `workspaceMount` in devcontainer.json disables the flag
+  (devcontainers/cli#1243).
+
 ## Update the project around it
 
 - **Docs and scripts**: replace `localhost:<port>` with the name URL, or
@@ -125,6 +143,7 @@ Run `berthlight status`. Each problem has its own message:
 | the proxy is not on network bl-... | `berthlight up` |
 | no container answers to "bl-..." | devcontainer not running, or runArgs missing: run step 3 again and rebuild |
 | nothing listens on port N | dev server not started, wrong port, or bound to 127.0.0.1 (step 4) |
+| (in the container) gitdir does not point to a valid repository | a worktree container without its git directory: see Worktrees |
 | has not loaded this route | check the proxy's logs (`docker logs berthlight` or `podman logs berthlight`) |
 | the proxy's certificate ... does not verify | expired or wrong domain: ask the user to run `berthlight cert` |
 

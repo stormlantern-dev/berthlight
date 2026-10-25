@@ -506,3 +506,16 @@ func Project(src []byte) (string, bool) {
 	}
 	return "", false
 }
+
+// Has reports whether a devcontainer.json sets key at the top level.
+func Has(src []byte, key string) bool {
+	v, err := hujson.Parse(src)
+	if err != nil {
+		return false
+	}
+	obj, ok := v.Value.(*hujson.Object)
+	if !ok {
+		return false
+	}
+	return (&editor{obj: obj}).find(obj, key) >= 0
+}

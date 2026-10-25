@@ -110,7 +110,28 @@ func runDevcontainer(o devcontainerOptions, pos []string, stdout, stderr io.Writ
 		u := urlFor(c, label)
 		fmt.Fprintf(stdout, "This worktree's URL: %s\n", tui.NewTerm(stdout).Link(u, u))
 	}
+	worktreeAdvice(stdout, o.dir, devcontainer.Has(src, "workspaceMount"))
 	return nil
+}
+
+// worktreeAdvice says what git inside a worktree's own devcontainer needs:
+// worktrees with relative paths, and devcontainer up with
+// --mount-git-worktree-common-dir, which a workspaceMount turns off
+// (devcontainers/cli#1243).
+func worktreeAdvice(w io.Writer, dir string, workspaceMount bool) {
+	relative, absolute, err := naming.WorktreeGit(dir)
+	if err != nil {
+		return
+	}
+	if workspaceMount {
+		fmt.Fprintln(w, "Note: this devcontainer.json sets workspaceMount, so git will not work inside other worktrees' containers (devcontainers/cli#1243).")
+	}
+	if len(absolute) > 0 {
+		fmt.Fprintf(w, "Git cannot follow these worktrees from inside their containers, as their paths are absolute:\n  %s\nFix them with: git worktree repair --relative-paths\n", strings.Join(absolute, "\n  "))
+	}
+	if !relative {
+		fmt.Fprintln(w, "For git inside a worktree's container: git config worktree.useRelativePaths true, and devcontainer up --mount-git-worktree-common-dir.")
+	}
 }
 
 // findDevcontainer finds the project's devcontainer.json the way the

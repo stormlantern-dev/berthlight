@@ -77,6 +77,9 @@ def make-project [dir: path, name: string] {
   # Its own identity, so commits work during the demo on any machine.
   ^git -C $p config user.name "berthlight demo"
   ^git -C $p config user.email "demo@example.com"
+  # Worktrees with relative paths, so git works inside their own
+  # devcontainers (with --mount-git-worktree-common-dir, below).
+  ^git -C $p config worktree.useRelativePaths true
   ^git -C $p add -A
   ^git -C $p commit -q -m $"A devcontainer with a dev server on port ($PORT)"
   print $"created ($p)"
@@ -135,11 +138,11 @@ def dc-up [folder: path, extra: list<string>, verbose: bool] {
   let f = ($folder | path expand)
   let name = ($f | path basename)
   if $verbose {
-    ^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra
+    ^devcontainer up --workspace-folder $f --docker-path (runtime) --mount-git-worktree-common-dir ...$extra
     return
   }
   print -n $"starting ($name)… "
-  let r = (^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra | complete)
+  let r = (^devcontainer up --workspace-folder $f --docker-path (runtime) --mount-git-worktree-common-dir ...$extra | complete)
   let log = $"($r.stdout)\n($r.stderr)"
   let outcome = ($r.stdout | lines | where ($it | str starts-with '{"outcome"') | last 1 | each { from json } | get -o 0)
   if $r.exit_code == 0 and ($outcome.outcome? == "success") {
@@ -185,7 +188,7 @@ def "main privileges" [] {
 
 # The task for the agent in step 6: three variants of the webshop, each in
 # its own worktree and devcontainer, side by side.
-const AGENT_TASK = "Maak drie varianten van de landingspagina van deze webshop: dark, retro en minimal. Geef elke variant een eigen git worktree naast deze map (../webshop-dark, ../webshop-retro, ../webshop-minimal) en pas daar index.html aan, zodat de pagina echt bij de variant past. Commit in elke worktree. Start elke devcontainer met devcontainer up --workspace-folder <map>, controleer met berthlight dat alle drie antwoorden, en geef me tot slot de drie URLs."
+const AGENT_TASK = "Maak drie varianten van de landingspagina van deze webshop: dark, retro en minimal. Geef elke variant een eigen git worktree naast deze map (../webshop-dark, ../webshop-retro, ../webshop-minimal) en pas daar index.html aan, zodat de pagina echt bij de variant past. Commit in elke worktree. Start elke devcontainer met devcontainer up --workspace-folder <map> --mount-git-worktree-common-dir, controleer met berthlight dat alle drie antwoorden, en geef me tot slot de drie URLs."
 
 # Start Claude Code in the webshop with the task: edits accepted, the
 # demo's commands allowed by the settings setup wrote.
