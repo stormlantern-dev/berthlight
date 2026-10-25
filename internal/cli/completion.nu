@@ -33,10 +33,16 @@ let berthlight_completer = {|spans: list<string>|
 let berthlight_next_completer = $env.config?.completions?.external?.completer?
 
 $env.config.completions.external.enable = true
-$env.config.completions.external.completer = {|spans: list<string>|
+# Nushell 0.116 hands an external completer one record and binds its
+# fields by parameter name ({|place| ...}, with $place.command the tokens);
+# older versions pass the token list. Take either.
+$env.config.completions.external.completer = {|place|
+    let spans = if ($place | describe | str starts-with 'list') { $place } else { $place.command }
     if ($spans.0 | path parse | get stem) == 'berthlight' {
         do $berthlight_completer $spans
     } else if $berthlight_next_completer != null {
-        do $berthlight_next_completer $spans
+        # The completer set before this one may take the record or, in
+        # the older form, the token list.
+        try { do $berthlight_next_completer $place } catch { do $berthlight_next_completer $spans }
     }
 }
