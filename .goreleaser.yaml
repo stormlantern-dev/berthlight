@@ -14,6 +14,13 @@ project_name: berthlight
 before:
   hooks:
     - go mod verify
+    # Shell completion scripts, for the archives and every package below.
+    - sh -c 'rm -rf completions && mkdir completions &&
+        go run ./cmd/berthlight completion bash > completions/berthlight.bash &&
+        go run ./cmd/berthlight completion zsh > completions/_berthlight &&
+        go run ./cmd/berthlight completion fish > completions/berthlight.fish &&
+        go run ./cmd/berthlight completion powershell > completions/berthlight.ps1 &&
+        go run ./cmd/berthlight completion nushell > completions/berthlight.nu'
 
 builds:
   - id: berthlight
@@ -39,6 +46,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - completions/*
 
 checksum:
   name_template: checksums.txt
@@ -65,6 +73,26 @@ nfpms:
     description: Stable names for devcontainer dev servers, without published ports.
     license: Apache-2.0
     bindir: /usr/bin
+    # Shell completion where each shell looks for it. nushell runs the
+    # vendor autoload directory after config.nu; the completer there hands
+    # every other command to the one config.nu set (see README).
+    contents:
+      - src: ./completions/berthlight.bash
+        dst: /usr/share/bash-completion/completions/berthlight
+        file_info:
+          mode: 0644
+      - src: ./completions/_berthlight
+        dst: /usr/share/zsh/site-functions/_berthlight
+        file_info:
+          mode: 0644
+      - src: ./completions/berthlight.fish
+        dst: /usr/share/fish/vendor_completions.d/berthlight.fish
+        file_info:
+          mode: 0644
+      - src: ./completions/berthlight.nu
+        dst: /usr/share/nushell/vendor/autoload/berthlight.nu
+        file_info:
+          mode: 0644
     recommends:
       - git
     suggests:
@@ -74,6 +102,11 @@ nfpms:
 homebrew_casks:
   - name: berthlight
     binaries: [berthlight]
+    # From the archive; Homebrew links them where its shells look.
+    completions:
+      bash: completions/berthlight.bash
+      zsh: completions/_berthlight
+      fish: completions/berthlight.fish
     description: Stable names for devcontainer dev servers, without published ports
     homepage: https://github.com/stormlantern-dev/berthlight
     license: Apache-2.0
@@ -172,6 +205,10 @@ aurs:
     package: |-
       install -Dm755 "./berthlight" "${pkgdir}/usr/bin/berthlight"
       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/berthlight/LICENSE"
+      install -Dm644 "./completions/berthlight.bash" "${pkgdir}/usr/share/bash-completion/completions/berthlight"
+      install -Dm644 "./completions/_berthlight" "${pkgdir}/usr/share/zsh/site-functions/_berthlight"
+      install -Dm644 "./completions/berthlight.fish" "${pkgdir}/usr/share/fish/vendor_completions.d/berthlight.fish"
+      install -Dm644 "./completions/berthlight.nu" "${pkgdir}/usr/share/nushell/vendor/autoload/berthlight.nu"
 
 # The proxy image. The CLI runs ghcr.io/stormlantern-dev/berthlight:<version>
 # by default (internal/cli), so the tag must be the bare version.

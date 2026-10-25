@@ -10,21 +10,57 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/diff"
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/tui"
 )
 
-func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("devcontainer", stderr)
-	file := fs.String("file", "", "devcontainer.json to edit (default: .devcontainer/devcontainer.json or .devcontainer.json)")
-	dir := fs.String("C", ".", "project directory")
-	dryRun := fs.Bool("dry-run", false, "print the changes as a diff instead of writing them")
-	pos, err := parseInterspersed(fs, args)
-	if err != nil {
-		return errUsage
+type devcontainerOptions struct {
+	file, dir string
+	dryRun    bool
+}
+
+func newDevcontainerCmd() *cobra.Command {
+	var o devcontainerOptions
+	cmd := &cobra.Command{
+		Use:   "devcontainer <project> <port>",
+		Short: "Wire the project's devcontainer.json to berthlight",
+		Long: `devcontainer edits the project's devcontainer.json so that its dev server,
+on <port> inside the container, gets a berthlight name instead of a
+published port. Run it once, in the main worktree, and commit the change.
+
+The container joins its own network, bl-<folder name>, with that name as
+its alias, and appPort entries for <port> go. An initializeCommand runs
+'berthlight add' on the host before the container starts, so the route
+exists by the time the dev server does. Each worktree gets its own name:
+<project>.localhost for the main worktree, <project>-fix-login.localhost
+for one in ../webshop-fix-login.
+
+The file keeps its comments and layout; running devcontainer again changes
+nothing. --dry-run prints the change as a diff instead. The dev server must
+listen on 0.0.0.0 inside the container. Docker Compose devcontainers need
+the network wiring by hand.`,
+		Example: `  berthlight devcontainer shop 8080 --dry-run   # show the change
+  berthlight devcontainer shop 8080             # make it
+  berthlight devcontainer shop 5173 --file .devcontainer/web/devcontainer.json`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDevcontainer(o, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&o.file, "file", "", "devcontainer.json to edit (default: .devcontainer/devcontainer.json or .devcontainer.json)")
+	f.StringVarP(&o.dir, "dir", "C", ".", "project directory")
+	f.BoolVar(&o.dryRun, "dry-run", false, "print the changes as a diff instead of writing them")
+	cmd.MarkFlagFilename("file", "json", "jsonc")
+	cmd.MarkFlagDirname("dir")
+	return cmd
+}
+
+func runDevcontainer(o devcontainerOptions, pos []string, stdout, stderr io.Writer) error {
 	if len(pos) != 2 {
 		fmt.Fprintln(stderr, "usage: berthlight devcontainer <project> <port> [--file devcontainer.json] [--dry-run]")
 		return errUsage
@@ -34,9 +70,9 @@ func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("port %q is not a number", pos[1])
 	}
-	path := *file
+	path := o.file
 	if path == "" {
-		if path, err = findDevcontainer(*dir); err != nil {
+		if path, err = findDevcontainer(o.dir); err != nil {
 			return err
 		}
 	}
@@ -48,7 +84,7 @@ func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	if *dryRun {
+	if o.dryRun {
 		d := diff.Unified("a/"+filepath.ToSlash(path), "b/"+filepath.ToSlash(path), string(src), string(out))
 		if d == "" {
 			fmt.Fprintf(stderr, "%s is already wired to berthlight\n", path)
@@ -70,7 +106,7 @@ func cmdDevcontainer(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "Rebuild the container. The dev server must listen on 0.0.0.0:%d inside it.\n", port)
 	c, cerr := LoadConfig()
-	if label, lerr := naming.LabelFor(*dir, project); cerr == nil && lerr == nil {
+	if label, lerr := naming.LabelFor(o.dir, project); cerr == nil && lerr == nil {
 		u := urlFor(c, label)
 		fmt.Fprintf(stdout, "This worktree's URL: %s\n", tui.NewTerm(stdout).Link(u, u))
 	}

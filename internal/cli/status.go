@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/route"
 	rt "stormlantern.nl/berthlight/internal/runtime"
@@ -22,14 +23,45 @@ import (
 // errProblems makes status exit 1 without another message.
 var errProblems = errors.New("problems found")
 
-func cmdStatus(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("status", stderr)
-	asJSON := fs.Bool("json", false, "print the status as JSON")
-	watch := fs.Bool("watch", false, "keep checking, and say when a route comes up or goes down")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return errUsage
+func newStatusCmd() *cobra.Command {
+	var asJSON, watch bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Check the proxy and each route, and say what is wrong",
+		Long: `status checks the proxy and every route, and says for each problem what is
+wrong and what to do about it: the proxy container is missing or stopped,
+nothing answers on 127.0.0.1:<port>, a route's network is missing or the
+proxy is not on it, no container answers to the route's alias, nothing
+listens on its port, a name does not resolve to this machine, or the
+certificate does not verify.
+
+It exits 0 when everything works and 1 when something does not, so
+scripts and agents can wait on it.
+
+--watch keeps the status on screen and checks every second. On a terminal
+the tab title sums it up, the tab shows progress while a route is not up,
+and a desktop notification says when a route comes up or goes down.
+Without a terminal it prints one line per change, for logs.
+
+--json prints one check as JSON, for scripts and agents: "ok", the
+"proxy" (name, port, ok, problem) and the "routes", as in 'ls --json' with
+"ok" and "detail". Those field names stay.`,
+		Example: `  berthlight status
+  berthlight status --watch      # in a second tab, while the devcontainers start
+  berthlight status --json`,
+		Args:              noArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStatus(asJSON, watch, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
-	if *asJSON && *watch {
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the status as JSON")
+	cmd.Flags().BoolVar(&watch, "watch", false, "keep checking, and say when a route comes up or goes down")
+	return cmd
+}
+
+func runStatus(asJSON, watch bool, stdout, stderr io.Writer) error {
+	if asJSON && watch {
 		fmt.Fprintln(stderr, "berthlight: --json and --watch do not go together")
 		return errUsage
 	}
@@ -50,7 +82,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 		return chk.Check(ctx, tab), nil
 	}
 
-	if *watch {
+	if watch {
 		// Short probes keep the screen current; a dev server that is still
 		// compiling shows as starting and comes up on a later tick.
 		chk.Timeout = 3 * time.Second
@@ -65,7 +97,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *asJSON {
+	if asJSON {
 		err = writeJSON(stdout, statusJSON(c, rep))
 	} else {
 		writeReport(stdout, tui.NewTerm(stdout), c, rep, 0)

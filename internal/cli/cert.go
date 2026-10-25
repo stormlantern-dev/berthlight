@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"stormlantern.nl/berthlight/internal/acme"
 	"stormlantern.nl/berthlight/internal/naming"
 	rt "stormlantern.nl/berthlight/internal/runtime"
@@ -30,19 +31,69 @@ const CertEnvFile = "cert.env"
 // cmdCert obtains or renews the wildcard certificate for the user's own
 // base domain (PRD 0001, R7). It runs on the host, with the DNS
 // credentials; the proxy only ever sees the certificate and key files.
-func cmdCert(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("cert", stderr)
-	domain := fs.String("domain", "", "base domain the certificate is for, as *.<domain> (default: the first in $BERTHLIGHT_BASE that is not localhost)")
-	dns := fs.String("dns", "", "DNS provider, by lego's name: "+strings.Join(acme.Providers(), ", ")+" ($BERTHLIGHT_DNS_PROVIDER)")
-	server := fs.String("server", "", "ACME directory URL, or a CA lego knows such as letsencrypt-staging ($BERTHLIGHT_ACME_SERVER; default Let's Encrypt)")
-	email := fs.String("email", "", "contact address for the ACME account, optional ($BERTHLIGHT_ACME_EMAIL)")
-	resolvers := fs.String("resolvers", "", "DNS servers to check the challenge on, host:port, comma-separated ($BERTHLIGHT_DNS_RESOLVERS; default the system's and the zone's own)")
-	within := fs.Duration("renew-within", 0, "renew when the certificate expires within this time (default: when a third of its lifetime is left)")
-	tos := fs.Bool("accept-tos", false, "agree to the CA's terms of service; needed once, when the ACME account is created")
-	timer := fs.Bool("install-timer", false, "also install a daily renewal: a systemd user timer, or a launchd agent on macOS")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return errUsage
+type certOptions struct {
+	domain, dns, server, email, resolvers string
+	within                                time.Duration
+	tos, timer                            bool
+}
+
+func newCertCmd() *cobra.Command {
+	var o certOptions
+	cmd := &cobra.Command{
+		Use:   "cert --dns <provider>",
+		Short: "Get or renew a trusted wildcard certificate for your own domain",
+		Long: `cert gets a wildcard certificate for *.<domain>, a domain you own, from Let's
+Encrypt by default, with the DNS-01 challenge; then the proxy serves HTTPS
+on the same port and redirects plain http to https for those names. Run it
+again to renew: it renews when a third of the certificate's lifetime is
+left, and otherwise says until when the certificate is valid.
+
+Point *.<domain> at 127.0.0.1 (an A record, and AAAA ::1) at your DNS
+provider first, and put the domain in BERTHLIGHT_BASE, e.g.
+dev.example.com,localhost. cert runs on the host and is the only part that
+sees the DNS credentials: it reads them as lego does for the provider,
+from the environment or from cert.env in BERTHLIGHT_ACME_DIR
+(~/.config/berthlight; KEY=VALUE lines, chmod 600).
+
+The first run creates an ACME account, which means agreeing to the CA's
+terms of service: without --accept-tos it stops and shows where they are.
+--install-timer renews daily from then on: a systemd user timer on Linux,
+a launchd agent on macOS.`,
+		Example: `  # try it out first, with Let's Encrypt's staging CA
+  berthlight cert --dns cloudflare --server letsencrypt-staging --accept-tos
+
+  # the first time: get it, and renew it daily from then on
+  berthlight cert --dns gcloud --accept-tos --install-timer
+
+  # renew by hand, with BERTHLIGHT_DNS_PROVIDER set
+  berthlight cert`,
+		Args:              noArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCert(o, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&o.domain, "domain", "", "base domain the certificate is for, as *.<domain> (default: the first in $BERTHLIGHT_BASE that is not localhost)")
+	f.StringVar(&o.dns, "dns", "", "DNS provider, by lego's name: "+strings.Join(acme.Providers(), ", ")+" ($BERTHLIGHT_DNS_PROVIDER)")
+	f.StringVar(&o.server, "server", "", "ACME directory URL, or a CA lego knows such as letsencrypt-staging ($BERTHLIGHT_ACME_SERVER; default Let's Encrypt)")
+	f.StringVar(&o.email, "email", "", "contact address for the ACME account, optional ($BERTHLIGHT_ACME_EMAIL)")
+	f.StringVar(&o.resolvers, "resolvers", "", "DNS servers to check the challenge on, host:port, comma-separated ($BERTHLIGHT_DNS_RESOLVERS; default the system's and the zone's own)")
+	f.DurationVar(&o.within, "renew-within", 0, "renew when the certificate expires within this time (default: when a third of its lifetime is left)")
+	f.BoolVar(&o.tos, "accept-tos", false, "agree to the CA's terms of service; needed once, when the ACME account is created")
+	f.BoolVar(&o.timer, "install-timer", false, "also install a daily renewal: a systemd user timer, or a launchd agent on macOS")
+	cmd.RegisterFlagCompletionFunc("dns", fixedCompletions(acme.Providers()))
+	cmd.RegisterFlagCompletionFunc("server", fixedCompletions(acme.ServerCodes()))
+	cmd.RegisterFlagCompletionFunc("domain", completeOwnBases)
+	for _, name := range []string{"email", "resolvers", "renew-within"} {
+		cmd.RegisterFlagCompletionFunc(name, cobra.NoFileCompletions)
+	}
+	return cmd
+}
+
+func runCert(o certOptions, stdout, stderr io.Writer) error {
+	domain, dns, server, email, resolvers := &o.domain, &o.dns, &o.server, &o.email, &o.resolvers
+	within, timer, tos := &o.within, &o.timer, &o.tos
 	c, err := LoadConfig()
 	if err != nil {
 		return err

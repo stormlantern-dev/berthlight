@@ -115,6 +115,46 @@ skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
 server settings, docs and OAuth redirect URIs around it. Add `--project` to
 put it in the repository for everyone working on it.
 
+`berthlight help` lists the commands, and `berthlight <command> --help`
+says what one does, with examples.
+
+### Shell completion
+
+berthlight completes its commands, flags and values: route names for `rm`,
+agents for `skill --agent`, DNS providers and CAs for `cert`, directories
+for `-C`. The deb, rpm and apk packages, the AUR package and Homebrew
+install it for bash, zsh and fish; the Linux packages for nushell too. For
+an archive, or Scoop, set it up yourself:
+
+```sh
+berthlight completion bash > ~/.local/share/bash-completion/completions/berthlight   # needs bash-completion
+berthlight completion zsh > "${fpath[1]}/_berthlight"                                # before compinit
+berthlight completion fish > ~/.config/fish/completions/berthlight.fish
+berthlight completion powershell >> $PROFILE
+```
+
+In nushell, `berthlight completion nushell` prints an external completer
+that asks berthlight what to complete and hands every other command to the
+completer you had, such as carapace's. Put it in an autoload directory,
+which nushell runs after `config.nu`:
+
+```nu
+berthlight completion nushell | save -f ($nu.user-autoload-dirs | first | path join berthlight.nu)
+```
+
+If carapace completes everything for you and you would rather keep it that
+way, its cobra bridge works with berthlight as well. Give it a spec instead
+of the file above (on macOS, in `~/Library/Application Support/carapace/specs`):
+
+```nu
+mkdir ~/.config/carapace/specs
+'name: berthlight
+parsing: disabled
+completion:
+  positionalany: ["$carapace.bridge.Cobra([berthlight])"]
+' | save -f ~/.config/carapace/specs/berthlight.yaml
+```
+
 ## Development
 
 Open the repository in its devcontainer, or use Go 1.27 on the host:

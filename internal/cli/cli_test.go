@@ -168,12 +168,21 @@ func TestConfigErrors(t *testing.T) {
 	}
 }
 
-func TestParseInterspersed(t *testing.T) {
-	fs := newFlags("t", &bytes.Buffer{})
-	target := fs.String("target", "", "")
-	pos, err := parseInterspersed(fs, []string{"shop", "8080", "--target", "web"})
-	if err != nil || len(pos) != 2 || pos[0] != "shop" || pos[1] != "8080" || *target != "web" {
-		t.Errorf("got %q, %q, %v", pos, *target, err)
+// TestInterspersedFlags: flags may come after positional arguments, as in
+// `add shop 8080 --target web`. (This replaces the test of
+// parseInterspersed, which cobra made unnecessary.)
+func TestInterspersedFlags(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BERTHLIGHT_STATE_DIR", dir)
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "gallery", Target: "web", Port: 8089})
+	if err := route.Save(dir, tab); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	// The target clash shows that --target web, after the arguments, was read.
+	if code := Run([]string{"add", "shop", "8080", "--target", "web"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), `target "web" is already route "gallery"'s`) {
+		t.Errorf("add shop 8080 --target web: %d %q", code, errOut.String())
 	}
 }
 
