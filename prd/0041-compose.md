@@ -1,12 +1,15 @@
 # Docker Compose devcontainers
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-26
 - **Tracking issue:** #41, which holds the test plan and the verification record
 - **Builds on:** [0001](0001-berthlight.md), R1, R3, R5 and the worktree
   decision from #35
-- **First consumer:** none yet. None of the author's projects uses a Compose
-  devcontainer (checked 2026-10-26). See "What would change this plan".
+- **First consumer:** developers the operator knows, who will test it on
+  their own Compose projects. None of the author's projects uses a Compose
+  devcontainer (checked 2026-10-26).
+- **Decision:** build it, all three phases. Decided by the operator,
+  2026-10-26.
 
 ## Summary
 
@@ -20,8 +23,10 @@ devcontainer's own service gets a berthlight name. The wiring lives in a small
 override file that berthlight writes for each worktree, on the host, before
 Compose starts.
 
-The decision this PRD asks for: build Compose support now, without a first
-consumer, or keep the refusal and document the wiring by hand.
+The decision this PRD asked for: build Compose support now, without a first
+consumer of the author's own, or keep the refusal and document the wiring by
+hand. The operator decided to build it, on 2026-10-26: developers the
+operator knows will test it on their Compose projects.
 
 ## Why
 
@@ -109,7 +114,24 @@ Not verified:
 - VS Code: the Dev Containers extension follows the same spec, but it was not
   run.
 - Docker Desktop and macOS.
-- Compose's `!reset` tag with Podman's Compose provider (see Open questions).
+
+Measured while building it, on 2026-10-26, with the same versions:
+
+7. **`compose config` reads the merged configuration without a daemon.**
+   `docker-compose -f compose.yml config --format json`, `podman compose …`
+   and `docker compose …` (the podman-docker shim) all printed the merged
+   service, with Podman's API socket off. Published ports come out in the
+   long syntax, with a range such as `13000-13002:3000-3002` expanded into
+   one entry per port, and bind volumes with absolute host paths. Podman's
+   banner goes to standard error, so standard output is plain JSON.
+8. **`!override` and `!reset` work with Podman's Compose provider.** An
+   override with `ports: !override` and two of the service's five published
+   ports, applied with Docker Compose 5.6.1 through Podman 6.1.4's API
+   socket, left the container publishing exactly those two
+   (`127.0.0.1:19229->9229/tcp, 0.0.0.0:13001->3001/tcp`). `ports: !reset []`
+   left it publishing none. The same override's `networks` put `app` on
+   both its default network and `bl-agentexp`, with alias `bl-agentexp`, and
+   `app` still reached `db` by name.
 
 ## Prior art and what was ruled out
 
@@ -214,7 +236,11 @@ a stack's other services: the database of a worktree stays unreachable from
 the host and from other stacks. The override is written by the CLI on the
 host, from the folder name, the service and the port. It takes no other
 input, so a hostile worktree name cannot add arbitrary YAML: labels are
-validated by R4's rules before they are written.
+validated by R4's rules before they are written. As built, the network and
+alias also pass the route network rules and the service Compose's naming
+rules, and every value, paths included, is written as a quoted scalar with
+`$` escaped from Compose's interpolation; unit tests feed it hostile names
+and paths.
 
 ## Phasing
 
@@ -225,24 +251,56 @@ validated by R4's rules before they are written.
    tests (C4).
 3. **Git** (C6), then docs and status (C7).
 
+## Decisions
+
+- **Ports: Compose's merged configuration, then `!override`** (C5).
+  `berthlight add` asks Compose for the service as Compose sees it,
+  `<runtime> compose -f <the project's files, without the override> config
+  --format json` (`docker compose`, or `podman compose` with Docker Compose
+  v2 as its provider; `docker-compose` as a fallback). It drops the entries
+  whose container port is `<port>` over TCP and writes the rest with
+  `ports: !override`, or `ports: !reset []` when none are left. When the
+  service does not publish `<port>`, the override leaves `ports` alone.
+  Compose itself merges the files, `extends`, ranges and interpolation, so
+  berthlight parses no Compose file. Tested on Podman by hand (Evidence 8)
+  and in CI on Docker and Podman (C5). The ports are a snapshot of each
+  start, which the next start rewrites. Settled 2026-10-26.
+- **Without Compose, the override joins the network only.** When `config`
+  cannot run or fails, `add` says so and writes an override that puts the
+  service on `bl-<folder>` and its default network, leaves the published
+  ports, and mounts git only for an absolute `gitdir`, which needs no
+  container path. A start then works, with the old published port.
+- **The git mount comes from the merged configuration too** (C6). The
+  service's bind volume whose source is the worktree, or the nearest parent
+  of it, gives the worktree's path in the container; the relative `gitdir`
+  joined to that path, less its `worktrees/<name>` part, is where the git
+  directory goes. An absolute `gitdir` gets the same absolute path. When a
+  volume already shows the git directory there (the parent is mounted), no
+  mount is added.
+- **The override's name and place: `berthlight.compose.yml`, next to
+  `devcontainer.json`.** `dockerComposeFile` paths are relative to
+  `devcontainer.json`, so the entry is the bare file name wherever the
+  project's own Compose files live (`../compose.yml` is in the golden
+  tests), and the `.gitignore` beside it lists it. The override holds only
+  absolute paths, so Compose's project directory, the first file's, does
+  not change its meaning. `add` reads `dockerComposeFile` from the
+  `devcontainer.json` next to the override, so the initializeCommand names
+  only the override and the service.
+- **The route remembers the Compose service** (`compose` in
+  `routes.json`), so `status` gives a Compose service that is not on its
+  network its own advice (C7).
+
 ## Open questions
 
-- **Removing one published port without editing the Compose file.** Compose
-  2.24+ has `!reset` and `!override` tags, which an override can use to
-  replace a service's `ports` list. That needs berthlight to read the
-  project's Compose files to keep the other ports, and needs Podman's Compose
-  provider to support the tags. *Settled by:* phase 1, tested on Docker and
-  Podman.
-- **The override's name and place.** `.devcontainer/berthlight.compose.yml`
-  is assumed. *Settled by:* phase 1; a project with its Compose files
-  elsewhere.
 - **VS Code.** Whether the extension runs `initializeCommand` before reading
   Compose files, as the CLI does. *Settled by:* one run in VS Code.
 
 ## What would change this plan
 
-- **No consumer appears.** Without a Compose project to dogfood on, phase 2
-  waits: phase 1 plus a README section on wiring by hand may be enough.
+- **The testers' projects disagree with the design**, for example Compose
+  files that need a project directory other than the first file's, or a
+  dev service with `network_mode`, which cannot join a network and which
+  `add` refuses.
 - **Devcontainer variables reach Compose files.** If the Dev Containers spec
   starts substituting `${localWorkspaceFolderBasename}` in Compose files, a
   committed override can replace the generated one.
@@ -250,4 +308,5 @@ validated by R4's rules before they are written.
   not berthlight's.
 - **The CLI reads Compose files before `initializeCommand`.** That would
   break the design. Evidence 1 shows the opposite on 0.89.0, so a CI test
-  guards it.
+  guards it: `TestRealComposeDevcontainer` starts each worktree with no
+  override on disk, and Compose fails without the file it names.

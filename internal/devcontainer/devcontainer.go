@@ -22,12 +22,17 @@ package devcontainer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/tailscale/hujson"
+	"stormlantern.nl/berthlight/internal/compose"
 	"stormlantern.nl/berthlight/internal/naming"
 )
 
@@ -50,12 +55,30 @@ func InitCommand(project string, port int) []string {
 	}
 }
 
+// ComposeInitCommand is the initializeCommand for a Compose devcontainer:
+// it also writes the override that joins service to the network (PRD
+// 0041). override is the override's path relative to the workspace
+// folder, slash-separated.
+func ComposeInitCommand(project string, port int, service, override string) []string {
+	cmd := InitCommand(project, port)
+	n := len(cmd) - 3 // before -C
+	return slices.Concat(cmd[:n], []string{"--compose-service", service, "--compose-override", override}, cmd[n:])
+}
+
 // RunArgs are the arguments that put the container on its route network.
 var RunArgs = []string{"--network=" + Network, "--network-alias=" + Network}
 
 // Edit returns src with the berthlight wiring for project and port. Running
-// it on its own output changes nothing.
-func Edit(src []byte, project string, port int) ([]byte, error) {
+// it on its own output changes nothing. dir is the directory of
+// devcontainer.json relative to the workspace folder, slash-separated
+// (".devcontainer"); a Compose devcontainer's override goes there.
+//
+// A Compose devcontainer gets no runArgs, which the Dev Container CLI
+// ignores for Compose (PRD 0041). Instead, an override file joins its
+// service to the network: dockerComposeFile lists it last, and the
+// initializeCommand writes it on each start. The override is each
+// worktree's own and must not be committed; GitIgnore lists it.
+func Edit(src []byte, project string, port int, dir string) ([]byte, error) {
 	if err := checkProject(project); err != nil {
 		return nil, err
 	}
@@ -76,18 +99,114 @@ func Edit(src []byte, project string, port int) ([]byte, error) {
 	}
 	e.indent = memberIndent(obj, "  ")
 	if e.find(e.obj, "dockerComposeFile") >= 0 {
-		return nil, errors.New("this devcontainer uses Docker Compose, which berthlight devcontainer does not handle yet; join the service to the network in the compose file instead (berthlight add prints the network and alias)")
-	}
-	if err := e.runArgs(); err != nil {
-		return nil, err
-	}
-	if err := e.initializeCommand(InitCommand(project, port)); err != nil {
-		return nil, err
+		service, err := e.composeFile()
+		if err != nil {
+			return nil, err
+		}
+		override := path.Join(dir, compose.FileName)
+		if err := e.initializeCommand(ComposeInitCommand(project, port, service, override)); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := e.runArgs(); err != nil {
+			return nil, err
+		}
+		if err := e.initializeCommand(InitCommand(project, port)); err != nil {
+			return nil, err
+		}
 	}
 	if err := e.appPort(port); err != nil {
 		return nil, err
 	}
 	return v.Pack(), nil
+}
+
+// composeFile adds the override to dockerComposeFile, last, so it merges
+// over the project's own files, and returns the devcontainer's service.
+func (e *editor) composeFile() (string, error) {
+	service := ""
+	if i := e.find(e.obj, "service"); i >= 0 {
+		service, _ = stringValue(e.obj.Members[i].Value)
+	}
+	if service == "" {
+		return "", errors.New("dockerComposeFile without a service: name the devcontainer's Compose service in service")
+	}
+	i := e.find(e.obj, "dockerComposeFile")
+	v := &e.obj.Members[i].Value
+	switch x := v.Value.(type) {
+	case hujson.Literal:
+		if x.Kind() != '"' {
+			return "", errors.New("dockerComposeFile is not a string or an array")
+		}
+		if x.String() == compose.FileName {
+			return service, nil
+		}
+		v.Value = stringArray([]string{x.String(), compose.FileName})
+	case *hujson.Array:
+		for _, el := range x.Elements {
+			if s, _ := stringValue(el); s == compose.FileName {
+				return service, nil
+			}
+		}
+		e.appendElement(x, hujson.String(compose.FileName))
+	default:
+		return "", errors.New("dockerComposeFile is not a string or an array")
+	}
+	return service, nil
+}
+
+// GitIgnore returns src, a .gitignore, listing the Compose override, which
+// is each worktree's own. src is empty for a new file.
+func GitIgnore(src []byte) []byte {
+	for _, l := range strings.Split(string(src), "\n") {
+		l = strings.TrimSpace(l)
+		if l == compose.FileName || l == "/"+compose.FileName {
+			return src
+		}
+	}
+	nl := "\n"
+	if bytes.Contains(src, []byte("\r\n")) {
+		nl = "\r\n"
+	}
+	out := append([]byte{}, src...)
+	if len(out) > 0 && !bytes.HasSuffix(out, []byte("\n")) {
+		out = append(out, nl...)
+	}
+	return append(out, "# Written by berthlight add, for each worktree"+nl+compose.FileName+nl...)
+}
+
+// ComposeFiles returns the Compose files a devcontainer.json names in
+// dockerComposeFile, relative to its directory, without berthlight's
+// override, and its service.
+func ComposeFiles(src []byte) (files []string, service string, err error) {
+	std, err := hujson.Standardize(append([]byte{}, src...))
+	if err != nil {
+		return nil, "", fmt.Errorf("parsing devcontainer.json: %w", err)
+	}
+	var dc struct {
+		DockerComposeFile json.RawMessage `json:"dockerComposeFile"`
+		Service           string          `json:"service"`
+	}
+	if err := json.Unmarshal(std, &dc); err != nil {
+		return nil, "", fmt.Errorf("parsing devcontainer.json: %w", err)
+	}
+	var all []string
+	if err := json.Unmarshal(dc.DockerComposeFile, &all); err != nil {
+		var one string
+		if err := json.Unmarshal(dc.DockerComposeFile, &one); err != nil {
+			return nil, "", errors.New("devcontainer.json has no dockerComposeFile")
+		}
+		all = []string{one}
+	}
+	for _, f := range all {
+		if path.Clean(filepath.ToSlash(f)) != compose.FileName {
+			files = append(files, f)
+		}
+	}
+	if len(files) == 0 {
+		return nil, "", errors.New("dockerComposeFile names no Compose file besides berthlight's")
+	}
+	return files, dc.Service, nil
 }
 
 func checkProject(p string) error {

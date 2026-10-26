@@ -1,0 +1,11 @@
+{
+  "name": "api",
+  "dockerComposeFile": ["../compose.yml", "berthlight.compose.yml"],
+  "service": "app",
+  "runServices": ["app", "db"],
+  "workspaceFolder": "/workspace",
+  "initializeCommand": {
+    "init": "touch .env",
+    "berthlight": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "--compose-service", "app", "--compose-override", ".devcontainer/berthlight.compose.yml", "-C", "${localWorkspaceFolder}", "8080"]
+  }
+}

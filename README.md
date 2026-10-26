@@ -73,6 +73,33 @@ devcontainer up --workspace-folder ../webshop-fix-login --mount-git-worktree-com
 ([devcontainers/cli#1243](https://github.com/devcontainers/cli/issues/1243)).
 `berthlight devcontainer` points out what is missing.
 
+### Docker Compose devcontainers
+
+A devcontainer with `dockerComposeFile` is wired with the same command. Compose
+ignores `runArgs`, and a committed Compose file cannot name the worktree, so
+berthlight wires it through an override file instead:
+
+- `berthlight devcontainer` adds `berthlight.compose.yml`, next to
+  `devcontainer.json`, last in `dockerComposeFile`, lists it in the
+  `.gitignore` there, and sets the `initializeCommand` to
+  `berthlight add … --compose-service <service> --compose-override …`.
+  `--dry-run` shows both files.
+- On each start, before Compose reads its files, that command writes the
+  override for the worktree. The devcontainer's `service` joins
+  `bl-<folder name>` under that alias and keeps its own networks; it stops
+  publishing the dev server's port on the host, while its other published
+  ports stay; and in a linked worktree, the repository's git directory is
+  mounted where the worktree's `gitdir` points inside the container, so git
+  works there without `--mount-git-worktree-common-dir` (which Compose
+  ignores).
+
+Each worktree runs its own Compose project, so its own database and other
+services. Only the dev service gets a name; the proxy cannot reach the rest of
+the stack. berthlight reads the merged configuration with
+`docker compose config` (or `podman compose config`, which needs Docker
+Compose v2 as Podman's Compose provider). Without Compose, the override still
+joins the network, and `add` says what it left as it was.
+
 ```sh
 berthlight url              # this worktree's URL (--copy puts it on the clipboard)
 berthlight status           # the proxy and every route, and what is wrong if anything is

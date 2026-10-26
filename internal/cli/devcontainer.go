@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"stormlantern.nl/berthlight/internal/compose"
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/diff"
 	"stormlantern.nl/berthlight/internal/naming"
@@ -38,13 +39,22 @@ exists by the time the dev server does. Each worktree gets its own name:
 <project>.localhost for the main worktree, <project>-fix-login.localhost
 for one in ../webshop-fix-login.
 
+For a Docker Compose devcontainer (dockerComposeFile), Compose ignores
+runArgs. Instead, devcontainer adds berthlight.compose.yml, next to
+devcontainer.json, last in dockerComposeFile, and lists it in the
+.gitignore there. The initializeCommand writes that override for its
+worktree on each start: the service joins bl-<folder name> under that
+alias, keeps its other networks, stops publishing <port> and, in a linked
+worktree, gets the repository's git directory. Other services in the
+stack get no name, and the proxy cannot reach them.
+
 The file keeps its comments and layout; running devcontainer again changes
-nothing. --dry-run prints the change as a diff instead. The dev server must
-listen on 0.0.0.0 inside the container. Docker Compose devcontainers need
-the network wiring by hand.`,
+nothing. --dry-run prints the changes as a diff instead. The dev server
+must listen on 0.0.0.0 inside the container.`,
 		Example: `  berthlight devcontainer shop 8080 --dry-run   # show the change
   berthlight devcontainer shop 8080             # make it
-  berthlight devcontainer shop 5173 --file .devcontainer/web/devcontainer.json`,
+  berthlight devcontainer shop 5173 --file .devcontainer/web/devcontainer.json
+  berthlight devcontainer api 3000 --dry-run    # a Compose devcontainer: also shows the .gitignore`,
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -80,29 +90,65 @@ func runDevcontainer(o devcontainerOptions, pos []string, stdout, stderr io.Writ
 	if err != nil {
 		return err
 	}
-	out, err := devcontainer.Edit(src, project, port)
+	rel, err := relDir(o.dir, path)
+	if err != nil {
+		return err
+	}
+	out, err := devcontainer.Edit(src, project, port, rel)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+	isCompose := devcontainer.Has(src, "dockerComposeFile")
+	edits := []fileEdit{{path: path, old: src, new: out, exists: true}}
+	if isCompose {
+		// The override is each worktree's own: git ignores it.
+		gi := filepath.Join(filepath.Dir(path), ".gitignore")
+		old, err := os.ReadFile(gi)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		edits = append(edits, fileEdit{path: gi, old: old, new: devcontainer.GitIgnore(old), exists: err == nil})
+	}
+	override := filepath.Join(filepath.Dir(path), compose.FileName)
 	if o.dryRun {
-		d := diff.Unified("a/"+filepath.ToSlash(path), "b/"+filepath.ToSlash(path), string(src), string(out))
-		if d == "" {
+		changed := false
+		for _, e := range edits {
+			a := "a/" + filepath.ToSlash(e.path)
+			if !e.exists {
+				a = "/dev/null"
+			}
+			d := diff.Unified(a, "b/"+filepath.ToSlash(e.path), string(e.old), string(e.new))
+			changed = changed || d != ""
+			fmt.Fprint(stdout, d)
+		}
+		if !changed {
 			fmt.Fprintf(stderr, "%s is already wired to berthlight\n", path)
 		}
-		fmt.Fprint(stdout, d)
+		if isCompose {
+			fmt.Fprintf(stderr, "On each start, the initializeCommand writes %s for its worktree.\n", override)
+		}
 		return nil
 	}
-	if string(out) == string(src) {
+	changed := false
+	for _, e := range edits {
+		if string(e.old) == string(e.new) {
+			continue
+		}
+		mode := fs.FileMode(0o644)
+		if info, err := os.Stat(e.path); err == nil {
+			mode = info.Mode().Perm()
+		}
+		if err := os.WriteFile(e.path, e.new, mode); err != nil {
+			return err
+		}
+		changed = true
+		fmt.Fprintf(stdout, "updated %s\n", e.path)
+	}
+	if !changed {
 		fmt.Fprintf(stdout, "%s is already wired to berthlight\n", path)
-	} else {
-		info, err := os.Stat(path)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, out, info.Mode().Perm()); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "updated %s\n", path)
+	}
+	if isCompose {
+		fmt.Fprintf(stdout, "On each start, the initializeCommand writes %s for its worktree; git ignores it.\n", override)
 	}
 	fmt.Fprintf(stdout, "Rebuild the container. The dev server must listen on 0.0.0.0:%d inside it.\n", port)
 	c, cerr := LoadConfig()
@@ -110,8 +156,36 @@ func runDevcontainer(o devcontainerOptions, pos []string, stdout, stderr io.Writ
 		u := urlFor(c, label)
 		fmt.Fprintf(stdout, "This worktree's URL: %s\n", tui.NewTerm(stdout).Link(u, u))
 	}
-	worktreeAdvice(stdout, o.dir, devcontainer.Has(src, "workspaceMount"))
+	if !isCompose { // the override mounts git for a Compose devcontainer
+		worktreeAdvice(stdout, o.dir, devcontainer.Has(src, "workspaceMount"))
+	}
 	return nil
+}
+
+// fileEdit is one file devcontainer changes.
+type fileEdit struct {
+	path     string
+	old, new []byte
+	exists   bool
+}
+
+// relDir is the directory of devcontainer.json relative to the project
+// directory, slash-separated: where the Compose override goes, as the
+// initializeCommand names it.
+func relDir(projectDir, file string) (string, error) {
+	absDir, err := filepath.Abs(projectDir)
+	if err != nil {
+		return "", err
+	}
+	absFile, err := filepath.Abs(file)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absDir, filepath.Dir(absFile))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is not inside the project directory %s; pass -C", file, projectDir)
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 // worktreeAdvice says what git inside a worktree's own devcontainer needs:

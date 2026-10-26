@@ -351,6 +351,9 @@ func TestCompletion(t *testing.T) {
 		{[]string{"devcontainer", "--file", ""}, []string{"json", "jsonc"}, true, ":8"},
 		{[]string{"devcontainer", "-C", ""}, nil, true, ":16"},
 		{[]string{"add", "--dir", ""}, nil, true, ":16"},
+		{[]string{"add", "--compose-override", ""}, []string{"yml", "yaml"}, true, ":8"},
+		{[]string{"add", "--compose-service", ""}, nil, true, ":4"},
+		{[]string{"add", "--compose"}, []string{"--compose-override", "--compose-service"}, true, ":4"},
 		{[]string{"skill", "install", "-C", ""}, nil, true, ":16"},
 		{[]string{"status", "-json", "--w"}, []string{"--watch"}, true, ":4"},
 	}
