@@ -181,6 +181,8 @@ func (c Checker) checkRoute(ctx context.Context, rs *RouteStatus, proxyNets []st
 		}
 	case reason == proxy.ErrNoRoute:
 		fail("the proxy has not loaded this route; see its logs: %s logs %s", c.Bin, c.ProxyName)
+	case reason == proxy.ErrUnresolved && r.Compose != "":
+		fail("no container answers to %q on network %s: the Compose service %q is not on it; check that dockerComposeFile in devcontainer.json lists berthlight.compose.yml last (berthlight devcontainer adds it), then rebuild the devcontainer", r.Target, network, r.Compose)
 	case reason == proxy.ErrUnresolved:
 		fail("no container answers to %q on network %s; is the devcontainer running, with --network %s --network-alias %s?", r.Target, network, network, r.Target)
 	case reason == proxy.ErrRefused:

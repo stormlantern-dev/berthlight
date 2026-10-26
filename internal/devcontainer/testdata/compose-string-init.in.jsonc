@@ -1,0 +1,9 @@
+{
+  "name": "api",
+  "dockerComposeFile": "../compose.yml",
+  "service": "app",
+  "runServices": ["app", "db"],
+  "workspaceFolder": "/workspace",
+  "appPort": ["127.0.0.1:8080:8080"],
+  "initializeCommand": "touch .env"
+}

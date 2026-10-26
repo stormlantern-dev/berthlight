@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,4 +80,34 @@ func TestLabelForWorktrees(t *testing.T) {
 			t.Error("want an error outside a git repository")
 		}
 	})
+}
+
+// TestWorktreeGit: a worktree made with --relative-paths is fine, one with
+// an absolute path is reported, and worktree.useRelativePaths is read.
+func TestWorktreeGit(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "shop")
+	if err := os.Mkdir(main, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, main, "init", "-q")
+	run(t, main, "commit", "-q", "--allow-empty", "-m", "init")
+	if out, err := exec.Command("git", "-C", main, "worktree", "add", "-h").CombinedOutput(); !strings.Contains(string(out), "relative-paths") {
+		t.Skipf("git without worktree --relative-paths (2.48+): %v", err)
+	}
+	run(t, main, "worktree", "add", "-q", "--relative-paths", filepath.Join(root, "shop-rel"))
+	run(t, main, "worktree", "add", "-q", "--no-relative-paths", filepath.Join(root, "shop-abs"))
+
+	relative, absolute, err := WorktreeGit(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative || len(absolute) != 1 || filepath.Base(absolute[0]) != "shop-abs" {
+		t.Errorf("relative %v, absolute %v; want false, [shop-abs]", relative, absolute)
+	}
+	run(t, main, "config", "worktree.useRelativePaths", "true")
+	run(t, main, "worktree", "repair", "--relative-paths")
+	if relative, absolute, err := WorktreeGit(filepath.Join(root, "shop-rel")); err != nil || !relative || len(absolute) != 0 {
+		t.Errorf("after repair: %v %v %v", relative, absolute, err)
+	}
 }

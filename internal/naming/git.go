@@ -2,6 +2,7 @@ package naming
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -66,4 +67,40 @@ func git(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return string(out), nil
+}
+
+// WorktreeGit reports, for the repository dir is in, whether git gives new
+// worktrees relative paths (worktree.useRelativePaths), and which linked
+// worktrees point at the repository with an absolute path. A worktree's own
+// devcontainer can reach the repository's git directory only through a
+// relative path (devcontainer up --mount-git-worktree-common-dir), so git
+// does not work in those containers.
+func WorktreeGit(dir string) (relative bool, absolute []string, err error) {
+	if out, err := git(dir, "config", "--type=bool", "--get", "worktree.useRelativePaths"); err == nil {
+		relative = strings.TrimSpace(out) == "true"
+	}
+	out, err := git(dir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false, nil, err
+	}
+	first := true
+	for _, line := range strings.Split(out, "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if !ok {
+			continue
+		}
+		if first { // the main worktree has a .git directory
+			first = false
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(path, ".git"))
+		if err != nil {
+			continue // missing or prunable
+		}
+		gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: ")
+		if ok && filepath.IsAbs(gitdir) {
+			absolute = append(absolute, path)
+		}
+	}
+	return relative, absolute, nil
 }

@@ -22,34 +22,9 @@ import (
 // It needs `devcontainer` on PATH, and skips without it unless
 // BERTHLIGHT_REQUIRE_DEVCONTAINER is set, as in CI.
 func TestRealDevcontainer(t *testing.T) {
-	dcBin, err := exec.LookPath("devcontainer")
-	if err != nil {
-		if os.Getenv("BERTHLIGHT_REQUIRE_DEVCONTAINER") != "" {
-			t.Fatal("devcontainer CLI not found; install it with: npm install -g @devcontainers/cli")
-		}
-		t.Skip("devcontainer CLI not found")
-	}
+	dcBin := devcontainerCLI(t)
 	e := setup(t)
-
-	// The initializeCommand calls `berthlight`; put this build first on
-	// PATH, or the binary $BERTHLIGHT_BIN names.
-	bin := t.TempDir()
-	if prebuilt := os.Getenv("BERTHLIGHT_BIN"); prebuilt != "" {
-		b, err := os.ReadFile(prebuilt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(bin, "berthlight"), b, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		build := exec.Command("go", "build", "-o", filepath.Join(bin, "berthlight"), "./cmd/berthlight")
-		build.Dir = filepath.Join("..", "..")
-		if out, err := build.CombinedOutput(); err != nil {
-			t.Fatalf("go build: %v\n%s", err, out)
-		}
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	berthlightOnPath(t)
 
 	root := t.TempDir()
 	mainDir := filepath.Join(root, e.name("webshop"))
@@ -86,7 +61,14 @@ func TestRealDevcontainer(t *testing.T) {
 	git("add", "-A")
 	git("commit", "-q", "-m", "devcontainer")
 	fix := mainDir + "-fix-login"
-	git("worktree", "add", "-q", fix)
+	// A relative path lets the second worktree's container reach the
+	// repository's git directory (--mount-git-worktree-common-dir below).
+	relative := gitHasRelativeWorktrees()
+	if relative {
+		git("worktree", "add", "-q", "--relative-paths", fix)
+	} else {
+		git("worktree", "add", "-q", fix)
+	}
 
 	// Remove the devcontainers before the networks they are on.
 	t.Cleanup(func() {
@@ -98,7 +80,7 @@ func TestRealDevcontainer(t *testing.T) {
 		}
 	})
 	for _, dir := range []string{mainDir, fix} {
-		cmd := exec.Command(dcBin, "up", "--workspace-folder", dir, "--docker-path", e.run.Bin)
+		cmd := exec.Command(dcBin, "up", "--workspace-folder", dir, "--docker-path", e.run.Bin, "--mount-git-worktree-common-dir")
 		var log bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &log, &log
 		if err := cmd.Run(); err != nil || !strings.Contains(log.String(), `"outcome":"success"`) {
@@ -112,8 +94,65 @@ func TestRealDevcontainer(t *testing.T) {
 		e.waitBody(project+".localhost", filepath.Base(mainDir), 15*time.Second)
 		e.waitBody(project+"-fix-login.localhost", filepath.Base(fix), 15*time.Second)
 	}
+	// Git works inside the second worktree's container: its .git file's
+	// gitdir resolves there (busybox has no git, so check the path).
+	if relative {
+		ids, _ := e.run.Run("ps", "-q", "--filter", "label=devcontainer.local_folder="+fix)
+		id := strings.Fields(ids)
+		if len(id) == 0 {
+			t.Fatal("no container for the second worktree")
+		}
+		out, err := e.run.Run("exec", id[0], "sh", "-c", `cd "$(dirname "$(find /workspaces -maxdepth 2 -name .git -type f | head -1)")" && test -f "$(sed 's/^gitdir: //' .git)/HEAD" && echo resolves`)
+		if err != nil || !strings.Contains(out, "resolves") {
+			t.Errorf("gitdir does not resolve in the worktree's container: %v %s", err, out)
+		}
+	} else {
+		t.Log("git without worktree --relative-paths: not checking git inside the container")
+	}
 	e.waitStatus("ok, HTTP 200", 0)
 	if _, s := e.status(); strings.Count(s, "ok, HTTP 200") != 2 {
 		t.Errorf("status:\n%s", s)
 	}
+}
+
+// devcontainerCLI returns the Dev Container CLI, or skips the test without
+// it, unless BERTHLIGHT_REQUIRE_DEVCONTAINER is set, as in CI.
+func devcontainerCLI(t *testing.T) string {
+	dcBin, err := exec.LookPath("devcontainer")
+	if err != nil {
+		if os.Getenv("BERTHLIGHT_REQUIRE_DEVCONTAINER") != "" {
+			t.Fatal("devcontainer CLI not found; install it with: npm install -g @devcontainers/cli")
+		}
+		t.Skip("devcontainer CLI not found")
+	}
+	return dcBin
+}
+
+// berthlightOnPath puts this build of berthlight first on PATH, or the
+// binary $BERTHLIGHT_BIN names: the initializeCommand calls `berthlight`.
+func berthlightOnPath(t *testing.T) {
+	bin := t.TempDir()
+	if prebuilt := os.Getenv("BERTHLIGHT_BIN"); prebuilt != "" {
+		b, err := os.ReadFile(prebuilt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "berthlight"), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		build := exec.Command("go", "build", "-o", filepath.Join(bin, "berthlight"), "./cmd/berthlight")
+		build.Dir = filepath.Join("..", "..")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build: %v\n%s", err, out)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// gitHasRelativeWorktrees reports whether git can add worktrees with
+// relative paths (2.48+).
+func gitHasRelativeWorktrees() bool {
+	out, _ := exec.Command("git", "worktree", "add", "-h").CombinedOutput()
+	return strings.Contains(string(out), "relative-paths")
 }

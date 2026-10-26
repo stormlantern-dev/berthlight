@@ -1,0 +1,7 @@
+// The app with its database, from Compose.
+{
+  "name": "api",
+  "dockerComposeFile": "compose.yml", // app and db
+  "service": "app",
+  "workspaceFolder": "/workspace",
+}

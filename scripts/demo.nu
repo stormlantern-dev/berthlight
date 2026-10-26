@@ -56,8 +56,7 @@ httpd -p 5173 -h /tmp/www
 '##
 
 def devcontainer-json [name: string] {
-  $"// The ($name) development container. Its dev server answers on port
-// ($PORT), published on the host: while it runs, no other project can use it.
+  $"// The ($name) development container, with its dev server on port ($PORT).
 {
   \"name\": \"($name)\",
   \"image\": \"($BUSYBOX)\",
@@ -78,6 +77,9 @@ def make-project [dir: path, name: string] {
   # Its own identity, so commits work during the demo on any machine.
   ^git -C $p config user.name "berthlight demo"
   ^git -C $p config user.email "demo@example.com"
+  # Worktrees with relative paths, so git works inside their own
+  # devcontainers (with --mount-git-worktree-common-dir, below).
+  ^git -C $p config worktree.useRelativePaths true
   ^git -C $p add -A
   ^git -C $p commit -q -m $"A devcontainer with a dev server on port ($PORT)"
   print $"created ($p)"
@@ -110,26 +112,60 @@ def "main setup" [--dir: path] {
   make-project $dir "gallery"
   for name in [webshop gallery] { agent-settings $dir ($dir | path join $name) }
   # The webshop's agent gets the skill now; the gallery's in step 4, live.
-  do { cd ($dir | path join "webshop"); ^berthlight --no-header skill install --project | ignore }
+  do { cd ($dir | path join "webshop"); ^berthlight --no-header skill install --agent claude --project | ignore }
   print $"pulling ($BUSYBOX)"
   ^(runtime) pull -q $BUSYBOX | ignore
-  print "starting and stopping the proxy once, to pull its image"
-  ^berthlight --no-header up
-  ^berthlight --no-header down
+  # Start the proxy once, to pull its image; stop it again only if it was
+  # not already running for other projects.
+  let proxy = ($env.BERTHLIGHT_PROXY_NAME? | default "berthlight")
+  let running = (^(runtime) ps -q --filter $"name=^($proxy)$" | str trim | is-not-empty)
+  if $running {
+    print "the proxy is already running; leaving it as it is"
+  } else {
+    print "starting and stopping the proxy once, to pull its image"
+    ^berthlight --no-header up
+    ^berthlight --no-header down
+  }
   print ""
   print $"Ready in ($dir). Next: ./scripts/demo.nu steps"
 }
 
-def dc-up [folder: path, extra: list<string>] {
+# devcontainer up for a folder, with the runtime berthlight uses. It prints
+# one line: where the dev server answers, or why it did not start. The
+# Dev Container CLI's own log, which is long and has harmless errors in it
+# (busybox has no /etc/os-release), only with --verbose or on failure.
+def dc-up [folder: path, extra: list<string>, verbose: bool] {
   let f = ($folder | path expand)
-  ^devcontainer up --workspace-folder $f --docker-path (runtime) ...$extra
+  let name = ($f | path basename)
+  if $verbose {
+    ^devcontainer up --workspace-folder $f --docker-path (runtime) --mount-git-worktree-common-dir ...$extra
+    return
+  }
+  print -n $"starting ($name)… "
+  let r = (^devcontainer up --workspace-folder $f --docker-path (runtime) --mount-git-worktree-common-dir ...$extra | complete)
+  let log = $"($r.stdout)\n($r.stderr)"
+  let outcome = ($r.stdout | lines | where ($it | str starts-with '{"outcome"') | last 1 | each { from json } | get -o 0)
+  if $r.exit_code == 0 and ($outcome.outcome? == "success") {
+    let wired = (open --raw ($f | path join ".devcontainer" "devcontainer.json") | str contains "berthlight")
+    let url = if $wired { ^berthlight url -C $f | str trim } else { $"http://localhost:($PORT)" }
+    print $"(ansi green)up(ansi reset) at ($url)"
+    return
+  }
+  let why = if ($log =~ '(?i)address already in use|port is already allocated|bind: address') {
+    $"port ($PORT) is already in use"
+  } else {
+    $outcome.message? | default "see the log above"
+  }
+  if not ($log =~ '(?i)address already in use|port is already allocated|bind: address') { print ""; print $log }
+  print $"(ansi red)failed(ansi reset): ($why)"
+  exit 1
 }
 
 # devcontainer up for a folder, with the runtime berthlight uses.
-def "main up" [folder: path] { dc-up $folder [] }
+def "main up" [folder: path, --verbose (-v)] { dc-up $folder [] $verbose }
 
 # The same, replacing the container: after changing devcontainer.json.
-def "main rebuild" [folder: path] { dc-up $folder [--remove-existing-container] }
+def "main rebuild" [folder: path, --verbose (-v)] { dc-up $folder [--remove-existing-container] $verbose }
 
 # Stop the devcontainer of a folder, as if its dev server went down.
 def "main stop" [folder: path] {
@@ -152,7 +188,7 @@ def "main privileges" [] {
 
 # The task for the agent in step 6: three variants of the webshop, each in
 # its own worktree and devcontainer, side by side.
-const AGENT_TASK = "Maak drie varianten van de landingspagina van deze webshop: dark, retro en minimal. Geef elke variant een eigen git worktree naast deze map (../webshop-dark, ../webshop-retro, ../webshop-minimal) en pas daar index.html aan, zodat de pagina echt bij de variant past. Commit in elke worktree. Start elke devcontainer met devcontainer up --workspace-folder <map>, controleer met berthlight dat alle drie antwoorden, en geef me tot slot de drie URLs."
+const AGENT_TASK = "Maak drie varianten van de landingspagina van deze webshop: dark, retro en minimal. Geef elke variant een eigen git worktree naast deze map (../webshop-dark, ../webshop-retro, ../webshop-minimal) en pas daar index.html aan, zodat de pagina echt bij de variant past. Commit in elke worktree. Start elke devcontainer met devcontainer up --workspace-folder <map> --mount-git-worktree-common-dir, controleer met berthlight dat alle drie antwoorden, en geef me tot slot de drie URLs."
 
 # Start Claude Code in the webshop with the task: edits accepted, the
 # demo's commands allowed by the settings setup wrote.
@@ -191,7 +227,7 @@ def "main steps" [--dir: path] {
       berthlight status
 
  4. The gallery, by an agent: in ($dir)/gallery, in Claude Code:
-      berthlight skill install --project
+      berthlight skill install --agent claude --project
       claude 'Wire this project to berthlight, project name gallery.'
       ($d) rebuild .           # http://gallery.localhost:7480, next to the shop
 

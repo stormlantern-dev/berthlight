@@ -3,8 +3,6 @@ package cli
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -152,83 +150,66 @@ func imageTag() string {
 	return strings.TrimPrefix(v, "v")
 }
 
-// Run runs one command and returns the exit code.
+// Run runs one command and returns the exit code: 0 on success, 1 on a
+// failure and when status finds a problem, 2 on a usage error.
 func Run(args []string, stdout, stderr io.Writer) int {
-	args, noHeader := stripFlag(args, "no-header")
+	// While completing, --no-header stays where it is: it is a word on
+	// the command line being completed, and cobra knows the flag.
+	completing := len(args) > 0 && strings.HasPrefix(args[0], "__complete")
+	noHeader := false
+	if !completing {
+		args, noHeader = stripFlag(args, "no-header")
+	}
+	root := newRoot()
+	args = normalizeArgs(root, args)
 	// The header, on a terminal (PRD 0001, R12). Without arguments, and
 	// for `demo`, the scene is the show and plays to its end; otherwise it
 	// animates only while the command works, and stops on its last frame
 	// at the command's first output.
 	if !noHeader && wantsHeader(args) {
-		h := tui.StartHeader(stdout, currentVersion())
+		h := startHeader(stdout, currentVersion())
 		show := len(args) == 0 || args[0] == "demo"
 		switch {
 		case show && h != nil:
 			if len(args) == 0 {
 				var b strings.Builder
-				usage(&b)
+				rootUsage(&b)
 				h.Print("\n" + b.String())
 			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			h.Play(ctx)
 			stop()
 			return 0
-		case show && len(args) > 0:
-			fmt.Fprintln(stdout, "berthlight demo plays on a terminal (not in CI, nor with BERTHLIGHT_NO_ANIMATION set).")
-			return 0
 		case h != nil:
 			defer h.Stop()
 			stdout, stderr = h.Wrap(stdout), h.Wrap(stderr)
 		}
 	}
-	if len(args) == 0 {
-		usage(stderr)
-		return 2
-	}
-	cmds := map[string]func([]string, io.Writer, io.Writer) error{
-		"add":   cmdAdd,
-		"rm":    cmdRm,
-		"ls":    cmdLs,
-		"up":    cmdUp,
-		"down":  cmdDown,
-		"url":   cmdURL,
-		"proxy": cmdProxy,
-		"cert":  cmdCert,
-
-		"status":       cmdStatus,
-		"devcontainer": cmdDevcontainer,
-		"skill":        cmdSkill,
-	}
-	switch args[0] {
-	case "version", "--version":
-		fmt.Fprintln(stdout, "berthlight", currentVersion())
-		return 0
-	case "help", "-h", "--help":
-		usage(stdout)
-		return 0
-	}
-	cmd, ok := cmds[args[0]]
-	if !ok {
-		fmt.Fprintf(stderr, "berthlight: unknown command %q\n\n", args[0])
-		usage(stderr)
-		return 2
-	}
-	if err := cmd(args[1:], stdout, stderr); err != nil {
-		if errors.Is(err, flag.ErrHelp) || errors.Is(err, errUsage) {
-			return 2
-		}
-		if errors.Is(err, errProblems) {
-			return 1
-		}
-		fmt.Fprintln(stderr, "berthlight:", err)
-		return 1
-	}
-	return 0
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	return execute(root, stderr)
 }
 
-var errUsage = errors.New("usage")
+// header is what Run needs of tui.Header; tests swap startHeader.
+type header interface {
+	Print(text string)
+	Play(ctx context.Context)
+	Wrap(w io.Writer) io.Writer
+	Stop()
+}
 
-func usage(w io.Writer) {
+// startHeader starts the header on w, or returns nil where none is drawn.
+var startHeader = func(w io.Writer, version string) header {
+	if h := tui.StartHeader(w, version); h != nil {
+		return h
+	}
+	return nil
+}
+
+// rootUsage is the overview: `berthlight help`, and under the scene when
+// berthlight runs without arguments.
+func rootUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage: berthlight <command> [flags]
 
 Global flags:
@@ -250,22 +231,29 @@ Commands:
                                (the first run, which creates the ACME account, needs --accept-tos)
   cert --install-timer         renew daily (systemd user timer, or launchd on macOS)
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
+                               (skill uninstall removes it, skill show prints it)
+  completion <shell>           print shell completion: bash, zsh, fish, powershell or nushell
   demo                         play the header animation
   version                      print the version
+  help [<command>]             this overview, or a command's help (also <command> --help)
 
 Environment:
   BERTHLIGHT_RUNTIME     docker or podman (default: whichever is installed, docker first)
   BERTHLIGHT_PORT        proxy port on loopback (default 7480)
   BERTHLIGHT_BASE        base domains, comma-separated (default localhost)
   BERTHLIGHT_IMAGE       proxy image
+  BERTHLIGHT_PROXY_NAME  name of the proxy container and its network (default berthlight)
   BERTHLIGHT_STATE_DIR   where routes and certificates are kept
   BERTHLIGHT_ACME_DIR    the ACME account and cert.env, for cert (default ~/.config/berthlight)
+  BERTHLIGHT_DNS_PROVIDER, BERTHLIGHT_ACME_SERVER, BERTHLIGHT_ACME_EMAIL, BERTHLIGHT_DNS_RESOLVERS
+                         defaults for cert's --dns, --server, --email and --resolvers
   BERTHLIGHT_NO_ANIMATION  set to draw no header or progress animation (also off in CI and without a terminal)
   BERTHLIGHT_SCENE       amiga or c64: force the header's scene (default: amiga, c64 when a link is too slow)
+
+Run 'berthlight <command> --help' for what a command does, its flags and examples.
 `)
 }
 
-// newFlags returns a flag set that prints its errors to stderr.
 // stripFlag removes a global boolean flag, given as --name or -name
 // anywhere on the command line, and reports whether it was there.
 func stripFlag(args []string, name string) ([]string, bool) {
@@ -282,10 +270,15 @@ func stripFlag(args []string, name string) ([]string, bool) {
 }
 
 // wantsHeader says whether a command shows the header: not the ones whose
-// output scripts read (url, JSON, the skill's text) and not the proxy.
+// output scripts read (url, JSON, the skill's text, completion), not help,
+// and not the proxy.
 func wantsHeader(args []string) bool {
 	for _, a := range args {
-		if a == "--json" || a == "-json" {
+		if a == "--" {
+			break
+		}
+		switch a {
+		case "--json", "-json", "--help", "-help", "-h":
 			return false
 		}
 	}
@@ -293,33 +286,10 @@ func wantsHeader(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "url", "proxy":
+	case "url", "proxy", "help", "completion", "__complete", "__completeNoDesc":
 		return false
 	case "skill":
 		return len(args) < 2 || args[1] != "show"
 	}
 	return true
-}
-
-func newFlags(name string, stderr io.Writer) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	return fs
-}
-
-// parseInterspersed parses flags that may come after positional arguments,
-// as in `add shop 8080 --target web`.
-func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			return pos, nil
-		}
-		pos = append(pos, args[0])
-		args = args[1:]
-	}
 }

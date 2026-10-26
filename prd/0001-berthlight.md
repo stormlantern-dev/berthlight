@@ -370,8 +370,13 @@ VTE-based ones) understand, and falls back to plain text everywhere else:
   of the run. `BERTHLIGHT_SCENE=amiga` or `=c64` forces either. The last
   frame in half blocks on other truecolor terminals;
   one line of text elsewhere. Without arguments, and as `berthlight demo`, it
-  plays to its end. Not for `url`, `proxy`, `skill show` or `--json`, and
-  never with the global flag `--no-header`.
+  plays to its end. Not for `url`, `proxy`, `skill show`, `--json`, help or
+  shell completion, and never with the global flag `--no-header`.
+- **Help and completion.** Every command has a help text that says what it
+  does and when to use it, with examples (`berthlight <command> --help`).
+  `berthlight completion` prints completion for bash, zsh, fish, PowerShell
+  and nushell, including route names, agents, DNS providers and CAs; the
+  packages install it where each shell looks (#36).
 - **Plain without a terminal.** Animations and escape sequences go to
   standard error, and only when it is a terminal; standard output is the same
   with or without one. No animation with `TERM=dumb`, in CI, or with
@@ -462,6 +467,13 @@ the tracking issue.
 - **308 for the HTTP to HTTPS redirect** (R2, R7): it keeps the method and
   body, so a form posted to an `http` URL still arrives. Decided by the
   operator, 2026-10-24.
+- **Git inside a worktree's devcontainer through the Dev Container CLI**
+  (R5, #35): worktrees with relative paths (`worktree.useRelativePaths`,
+  git 2.48+) and `devcontainer up --mount-git-worktree-common-dir`, which
+  mounts the repository's git directory beside the worktree. berthlight
+  does not mount it itself: the path is machine-specific and
+  `devcontainer.json` is committed. `berthlight devcontainer` points out
+  what is missing. Decided by the operator, 2026-10-25.
 
 ## Open questions
 

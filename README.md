@@ -57,6 +57,49 @@ starts. Each worktree gets its own name: `shop.localhost` for the main
 worktree, `shop-fix-login.localhost` for a worktree in `webshop-fix-login`.
 The dev server must listen on `0.0.0.0` inside the container.
 
+Give every worktree its own devcontainer. For git to work inside one, the
+worktree must point at the repository with a relative path, and the
+container needs the repository's git directory beside it:
+
+```sh
+git config --global worktree.useRelativePaths true   # once; git 2.48+
+git worktree add ../webshop-fix-login
+devcontainer up --workspace-folder ../webshop-fix-login --mount-git-worktree-common-dir
+```
+
+`git worktree repair --relative-paths` converts existing worktrees.
+`devcontainer exec` needs the same flag. A `workspaceMount` in
+`devcontainer.json` turns the flag off
+([devcontainers/cli#1243](https://github.com/devcontainers/cli/issues/1243)).
+`berthlight devcontainer` points out what is missing.
+
+### Docker Compose devcontainers
+
+A devcontainer with `dockerComposeFile` is wired with the same command. Compose
+ignores `runArgs`, and a committed Compose file cannot name the worktree, so
+berthlight wires it through an override file instead:
+
+- `berthlight devcontainer` adds `berthlight.compose.yml`, next to
+  `devcontainer.json`, last in `dockerComposeFile`, lists it in the
+  `.gitignore` there, and sets the `initializeCommand` to
+  `berthlight add … --compose-service <service> --compose-override …`.
+  `--dry-run` shows both files.
+- On each start, before Compose reads its files, that command writes the
+  override for the worktree. The devcontainer's `service` joins
+  `bl-<folder name>` under that alias and keeps its own networks; it stops
+  publishing the dev server's port on the host, while its other published
+  ports stay; and in a linked worktree, the repository's git directory is
+  mounted where the worktree's `gitdir` points inside the container, so git
+  works there without `--mount-git-worktree-common-dir` (which Compose
+  ignores).
+
+Each worktree runs its own Compose project, so its own database and other
+services. Only the dev service gets a name; the proxy cannot reach the rest of
+the stack. berthlight reads the merged configuration with
+`docker compose config` (or `podman compose config`, which needs Docker
+Compose v2 as Podman's Compose provider). Without Compose, the override still
+joins the network, and `add` says what it left as it was.
+
 ```sh
 berthlight url              # this worktree's URL (--copy puts it on the clipboard)
 berthlight status           # the proxy and every route, and what is wrong if anything is
@@ -114,6 +157,46 @@ Coding agents can do the wiring too. `berthlight skill install` installs a
 skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
 server settings, docs and OAuth redirect URIs around it. Add `--project` to
 put it in the repository for everyone working on it.
+
+`berthlight help` lists the commands, and `berthlight <command> --help`
+says what one does, with examples.
+
+### Shell completion
+
+berthlight completes its commands, flags and values: route names for `rm`,
+agents for `skill --agent`, DNS providers and CAs for `cert`, directories
+for `-C`. The deb, rpm and apk packages, the AUR package and Homebrew
+install it for bash, zsh and fish; the Linux packages for nushell too. For
+an archive, or Scoop, set it up yourself:
+
+```sh
+berthlight completion bash > ~/.local/share/bash-completion/completions/berthlight   # needs bash-completion
+berthlight completion zsh > "${fpath[1]}/_berthlight"                                # before compinit
+berthlight completion fish > ~/.config/fish/completions/berthlight.fish
+berthlight completion powershell >> $PROFILE
+```
+
+In nushell, `berthlight completion nushell` prints an external completer
+that asks berthlight what to complete and hands every other command to the
+completer you had, such as carapace's. Put it in an autoload directory,
+which nushell runs after `config.nu`:
+
+```nu
+berthlight completion nushell | save -f ($nu.user-autoload-dirs | first | path join berthlight.nu)
+```
+
+If carapace completes everything for you and you would rather keep it that
+way, its cobra bridge works with berthlight as well. Give it a spec instead
+of the file above (on macOS, in `~/Library/Application Support/carapace/specs`):
+
+```nu
+mkdir ~/.config/carapace/specs
+'name: berthlight
+parsing: disabled
+completion:
+  positionalany: ["$carapace.bridge.Cobra([berthlight])"]
+' | save -f ~/.config/carapace/specs/berthlight.yaml
+```
 
 ## Development
 
