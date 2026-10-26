@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"stormlantern.nl/berthlight/internal/certs"
+	"stormlantern.nl/berthlight/internal/compose"
 	"stormlantern.nl/berthlight/internal/devcontainer"
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/proxy"
@@ -38,8 +40,9 @@ func scheme(c Config) string {
 }
 
 type addOptions struct {
-	target, network, project, dir string
-	replace                       bool
+	target, network, project, dir   string
+	composeService, composeOverride string
+	replace                         bool
 }
 
 func newAddCmd() *cobra.Command {
@@ -60,7 +63,17 @@ worktree's suffix for any other worktree, such as shop-fix-login for
 writes runs add this way, so a wired devcontainer needs no add by hand.
 
 A route owns its name, network and alias. add refuses one that another
-route holds, and says which; --replace takes a name over.`,
+route holds, and says which; --replace takes a name over.
+
+For a Docker Compose devcontainer, --compose-service and
+--compose-override make add write an override file that Compose merges
+over the project's own files: the service joins the route's network under
+the alias, stops publishing <port> on the host, and, in a linked worktree,
+gets the repository's git directory mounted where the worktree's gitdir
+points. add reads the project's Compose files from the devcontainer.json
+next to the override, through 'docker compose config' (or podman's).
+'berthlight devcontainer' writes these flags into the initializeCommand,
+so the override is written for each worktree on each start.`,
 		Example: `  # shop.localhost -> port 8080 of the container with alias shop on network bl-shop
   berthlight add shop 8080
 
@@ -68,7 +81,11 @@ route holds, and says which; --replace takes a name over.`,
   berthlight add shop 8080 --target web --network bl-webshop
 
   # what a wired devcontainer's initializeCommand runs, for the worktree in ~/src/webshop
-  berthlight add --project shop --target bl-webshop --network bl-webshop -C ~/src/webshop 8080`,
+  berthlight add --project shop --target bl-webshop --network bl-webshop -C ~/src/webshop 8080
+
+  # the same for a Compose devcontainer whose service is app
+  berthlight add --project shop --target bl-webshop --network bl-webshop \
+    --compose-service app --compose-override .devcontainer/berthlight.compose.yml -C ~/src/webshop 8080`,
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,8 +98,11 @@ route holds, and says which; --replace takes a name over.`,
 	f.StringVar(&o.project, "project", "", "project name, when the name comes from the worktree (default: the main worktree's directory name)")
 	f.StringVarP(&o.dir, "dir", "C", ".", "directory inside the worktree, when the name comes from the worktree")
 	f.BoolVar(&o.replace, "replace", false, "take over a name another route holds")
+	f.StringVar(&o.composeService, "compose-service", "", "the Compose devcontainer's service, which joins the network (needs --compose-override)")
+	f.StringVar(&o.composeOverride, "compose-override", "", "Compose override file to write for the service, relative to --dir (needs --compose-service)")
 	cmd.MarkFlagDirname("dir")
-	for _, name := range []string{"target", "network", "project"} {
+	cmd.MarkFlagFilename("compose-override", "yml", "yaml")
+	for _, name := range []string{"target", "network", "project", "compose-service"} {
 		cmd.RegisterFlagCompletionFunc(name, cobra.NoFileCompletions)
 	}
 	return cmd
@@ -110,7 +130,10 @@ func runAdd(o addOptions, pos []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("port %q is not a number", portArg)
 	}
-	r := route.Route{Name: name, Target: name, Port: port, NetworkName: o.network}
+	if (o.composeService == "") != (o.composeOverride == "") {
+		return &usageError{msg: "--compose-service and --compose-override go together"}
+	}
+	r := route.Route{Name: name, Target: name, Port: port, NetworkName: o.network, Compose: o.composeService}
 	if o.target != "" {
 		r.Target = o.target
 	}
@@ -138,6 +161,11 @@ func runAdd(o addOptions, pos []string, stdout, stderr io.Writer) error {
 	run, err := rt.Detect()
 	if err != nil {
 		return err
+	}
+	if o.composeOverride != "" {
+		if err := writeComposeOverride(o, r, run, stderr); err != nil {
+			return err
+		}
 	}
 	if exists && old.Network() != r.Network() {
 		if err := removeRoute(c, run, tab, old, stderr); err != nil {
@@ -167,6 +195,71 @@ func runAdd(o addOptions, pos []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "%s -> %s\n", tui.NewTerm(stdout).Link(u, u), r.Addr())
 	fmt.Fprintf(stdout, "Join the container to it: --network %s --network-alias %s\n", r.Network(), r.Target)
 	return nil
+}
+
+// writeComposeOverride writes the Compose override that joins the
+// devcontainer's service to r's network (PRD 0041). It reads the project's
+// Compose files from the devcontainer.json next to the override, merged by
+// Compose itself; without them, the override only joins the network.
+func writeComposeOverride(o addOptions, r route.Route, run rt.Runtime, stderr io.Writer) error {
+	path := filepath.FromSlash(o.composeOverride)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(o.dir, path)
+	}
+	var cfg *compose.Config
+	files, err := composeFilesBeside(filepath.Dir(path))
+	if err == nil {
+		var cmd []string
+		if cmd, err = compose.Command(run.Bin); err == nil {
+			cfg, err = compose.Load(cmd, files)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "berthlight: cannot read the Compose configuration (%v); %s joins %s, but keeps publishing its ports, and git in a linked worktree's container may not work\n", err, o.composeService, r.Network())
+	}
+	var git *compose.Git
+	if wt, err := naming.FindWorktree(o.dir); err == nil && !wt.IsMain() {
+		if git, err = compose.LinkedGit(wt.Dir, filepath.Join(wt.MainDir, ".git")); err != nil {
+			fmt.Fprintf(stderr, "berthlight: %v\n", err)
+		}
+	}
+	ov, notes, err := compose.Plan(cfg, o.composeService, r.Network(), r.Target, r.Port, git)
+	if err != nil {
+		return err
+	}
+	for _, n := range notes {
+		fmt.Fprintf(stderr, "berthlight: %s\n", n)
+	}
+	b, err := ov.Render()
+	if err != nil {
+		return err
+	}
+	return compose.Write(path, b)
+}
+
+// composeFilesBeside returns the project's own Compose files, as absolute
+// paths, from the devcontainer.json in dir.
+func composeFilesBeside(dir string) ([]string, error) {
+	var src []byte
+	var err error
+	for _, name := range []string{"devcontainer.json", ".devcontainer.json"} {
+		if src, err = os.ReadFile(filepath.Join(dir, name)); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("no devcontainer.json next to the override: %w", err)
+	}
+	files, _, err := devcontainer.ComposeFiles(src)
+	if err != nil {
+		return nil, err
+	}
+	for i, f := range files {
+		if !filepath.IsAbs(f) {
+			files[i] = filepath.Join(dir, filepath.FromSlash(f))
+		}
+	}
+	return files, nil
 }
 
 func newRmCmd() *cobra.Command {

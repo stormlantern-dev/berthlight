@@ -22,4 +22,4 @@ parallel never collide.
 | PRD | Status | Issue |
 |---|---|---|
 | [berthlight: stable names for devcontainer dev servers](0001-berthlight.md) | Accepted | #1 |
-| [Docker Compose devcontainers](0041-compose.md) | Proposed | #41 |
+| [Docker Compose devcontainers](0041-compose.md) | Accepted | #41 |

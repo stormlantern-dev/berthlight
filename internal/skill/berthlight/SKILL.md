@@ -2,7 +2,7 @@
 name: berthlight
 description: Give a devcontainer's dev server a stable name such as http://shop.localhost:7480 instead of a published host port, with berthlight. Use when a project's devcontainer.json publishes ports (appPort), when devcontainers or git worktrees collide on a port, when the user asks for a stable dev URL or mentions berthlight, when a dev server behind berthlight does not answer, or when docs, .env files or OAuth redirect URIs hard-code localhost:<port>.
 license: Apache-2.0
-compatibility: Needs the berthlight CLI on the host (not inside the container), Docker or Podman, and devcontainers. Docker Compose devcontainers need manual wiring.
+compatibility: Needs the berthlight CLI on the host (not inside the container), Docker or Podman, and devcontainers. Docker Compose devcontainers also need Docker Compose v2 (with Podman, as its Compose provider).
 metadata:
   version: "{{VERSION}}"
   homepage: https://github.com/stormlantern-dev/berthlight
@@ -51,7 +51,8 @@ directory name, never its branch.
    registers the route on the host before the container starts (an existing
    command is kept, in the object form that runs both), and removes the
    `appPort` entries for that port. A second run changes nothing. It refuses
-   a `runArgs` network of another name, and Compose devcontainers.
+   a `runArgs` network of another name. For a Compose devcontainer, see
+   below: same command, different wiring.
 4. **Make the dev server listen on all interfaces inside the container**,
    not only on 127.0.0.1, or the proxy cannot reach it:
    - Vite: `server.host: true` (or `vite --host 0.0.0.0`)
@@ -76,11 +77,38 @@ directory name, never its branch.
    status` checks the proxy and every route and exits 1 when something is
    wrong. Open the URL.
 
+## Docker Compose devcontainers
+
+When `devcontainer.json` has `dockerComposeFile` and `service`, step 3 is the
+same command, but Compose ignores `runArgs`, so berthlight wires it through
+an override file:
+
+- It adds `berthlight.compose.yml` (next to `devcontainer.json`) last in
+  `dockerComposeFile`, lists it in the `.gitignore` there, and sets the
+  `initializeCommand` to `berthlight add ... --compose-service <service>
+  --compose-override .devcontainer/berthlight.compose.yml`. Commit
+  `devcontainer.json` and the `.gitignore`, never the override.
+- On each start, that command writes the override for the worktree: the
+  service joins `bl-<folder>` with that alias and keeps its own networks;
+  it stops publishing the dev server's port on the host (other published
+  ports stay); in a linked worktree it mounts the repository's git
+  directory where the worktree's `gitdir` points, so git works inside.
+- Do not edit the project's Compose files for berthlight, and do not add
+  `ports` for the dev server back. Other services (a database) keep their
+  service names inside the stack and get no berthlight name.
+- Each worktree is its own Compose project, with its own database.
+- `add` reads the merged configuration with `docker compose config` (or
+  `podman compose config`, which needs Docker Compose v2 as Podman's Compose
+  provider). Without it, the override only joins the network and `add` says
+  so; ask the user to install Compose v2.
+
 ## Worktrees
 
-Each worktree runs its own devcontainer. Git works inside it only when the
-worktree points at the repository with a relative path and the container
-mounts the repository's git directory:
+Each worktree runs its own devcontainer. For a Compose devcontainer, git
+needs nothing more than worktrees made by git: berthlight's override mounts
+the git directory. For the others, git works inside the container only
+when the worktree points at the repository with a relative path and the
+container mounts the repository's git directory:
 
 - Create worktrees with `git worktree add --relative-paths ...`, or set
   `git config worktree.useRelativePaths true` once (git 2.48+). Convert
@@ -142,6 +170,7 @@ Run `berthlight status`. Each problem has its own message:
 | network bl-... does not exist | start the devcontainer (its initializeCommand creates it) |
 | the proxy is not on network bl-... | `berthlight up` |
 | no container answers to "bl-..." | devcontainer not running, or runArgs missing: run step 3 again and rebuild |
+| the Compose service "..." is not on it | `dockerComposeFile` lacks `berthlight.compose.yml`: run step 3 again and rebuild |
 | nothing listens on port N | dev server not started, wrong port, or bound to 127.0.0.1 (step 4) |
 | (in the container) gitdir does not point to a valid repository | a worktree container without its git directory: see Worktrees |
 | has not loaded this route | check the proxy's logs (`docker logs berthlight` or `podman logs berthlight`) |

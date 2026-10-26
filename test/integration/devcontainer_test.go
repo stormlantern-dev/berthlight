@@ -22,34 +22,9 @@ import (
 // It needs `devcontainer` on PATH, and skips without it unless
 // BERTHLIGHT_REQUIRE_DEVCONTAINER is set, as in CI.
 func TestRealDevcontainer(t *testing.T) {
-	dcBin, err := exec.LookPath("devcontainer")
-	if err != nil {
-		if os.Getenv("BERTHLIGHT_REQUIRE_DEVCONTAINER") != "" {
-			t.Fatal("devcontainer CLI not found; install it with: npm install -g @devcontainers/cli")
-		}
-		t.Skip("devcontainer CLI not found")
-	}
+	dcBin := devcontainerCLI(t)
 	e := setup(t)
-
-	// The initializeCommand calls `berthlight`; put this build first on
-	// PATH, or the binary $BERTHLIGHT_BIN names.
-	bin := t.TempDir()
-	if prebuilt := os.Getenv("BERTHLIGHT_BIN"); prebuilt != "" {
-		b, err := os.ReadFile(prebuilt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(bin, "berthlight"), b, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		build := exec.Command("go", "build", "-o", filepath.Join(bin, "berthlight"), "./cmd/berthlight")
-		build.Dir = filepath.Join("..", "..")
-		if out, err := build.CombinedOutput(); err != nil {
-			t.Fatalf("go build: %v\n%s", err, out)
-		}
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	berthlightOnPath(t)
 
 	root := t.TempDir()
 	mainDir := filepath.Join(root, e.name("webshop"))
@@ -138,6 +113,41 @@ func TestRealDevcontainer(t *testing.T) {
 	if _, s := e.status(); strings.Count(s, "ok, HTTP 200") != 2 {
 		t.Errorf("status:\n%s", s)
 	}
+}
+
+// devcontainerCLI returns the Dev Container CLI, or skips the test without
+// it, unless BERTHLIGHT_REQUIRE_DEVCONTAINER is set, as in CI.
+func devcontainerCLI(t *testing.T) string {
+	dcBin, err := exec.LookPath("devcontainer")
+	if err != nil {
+		if os.Getenv("BERTHLIGHT_REQUIRE_DEVCONTAINER") != "" {
+			t.Fatal("devcontainer CLI not found; install it with: npm install -g @devcontainers/cli")
+		}
+		t.Skip("devcontainer CLI not found")
+	}
+	return dcBin
+}
+
+// berthlightOnPath puts this build of berthlight first on PATH, or the
+// binary $BERTHLIGHT_BIN names: the initializeCommand calls `berthlight`.
+func berthlightOnPath(t *testing.T) {
+	bin := t.TempDir()
+	if prebuilt := os.Getenv("BERTHLIGHT_BIN"); prebuilt != "" {
+		b, err := os.ReadFile(prebuilt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "berthlight"), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		build := exec.Command("go", "build", "-o", filepath.Join(bin, "berthlight"), "./cmd/berthlight")
+		build.Dir = filepath.Join("..", "..")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build: %v\n%s", err, out)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // gitHasRelativeWorktrees reports whether git can add worktrees with

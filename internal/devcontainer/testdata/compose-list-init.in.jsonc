@@ -1,0 +1,13 @@
+{
+  "name": "api",
+  "dockerComposeFile": [
+    "../compose.yml",
+    // Ports and volumes for development.
+    "compose.dev.yml",
+  ],
+  "service": "app",
+  "initializeCommand": {
+    "env": "touch .env",
+  },
+  "forwardPorts": [5432],
+}

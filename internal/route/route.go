@@ -38,6 +38,10 @@ type Route struct {
 	// because devcontainer.json can name the folder but cannot derive the
 	// route name from it (see the devcontainer package).
 	NetworkName string `json:"network,omitempty"`
+	// Compose is the devcontainer's Compose service, when the route is a
+	// Compose devcontainer's (PRD 0041). The service joins the network
+	// through berthlight's override file, not runArgs, so status says so.
+	Compose string `json:"compose,omitempty"`
 }
 
 // Addr is the upstream address, target:port.

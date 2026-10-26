@@ -233,6 +233,24 @@ func TestHTTPS(t *testing.T) {
 	}
 }
 
+// TestComposeUnresolved: when a Compose devcontainer's service is not on
+// its network, status points at the override in dockerComposeFile, not at
+// runArgs, which Compose ignores (PRD 0041, C7).
+func TestComposeUnresolved(t *testing.T) {
+	tab := &route.Table{}
+	tab.Put(route.Route{Name: "unresolved", Target: "bl-api", Port: 8080, NetworkName: "bl-unresolved", Compose: "app"})
+	rep := checker(healthy("unresolved"), fakeProxy(t)).Check(context.Background(), tab)
+	d := rep.Routes[0].Detail
+	for _, want := range []string{`the Compose service "app" is not on it`, "dockerComposeFile", "berthlight.compose.yml", "rebuild"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("detail %q lacks %q", d, want)
+		}
+	}
+	if strings.Contains(d, "--network-alias") {
+		t.Errorf("detail %q speaks of runArgs", d)
+	}
+}
+
 func TestNoRoutes(t *testing.T) {
 	rep := checker(healthy(), fakeProxy(t)).Check(context.Background(), &route.Table{})
 	if !rep.OK() || len(rep.Routes) != 0 {

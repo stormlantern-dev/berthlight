@@ -1,0 +1,6 @@
+{
+  "dockerComposeFile": ["../compose.yml", "compose.dev.yml", "berthlight.compose.yml"],
+  "service": "web",
+  "workspaceFolder": "/workspaces/api",
+  "initializeCommand": ["berthlight", "add", "--project", "shop", "--target", "bl-${localWorkspaceFolderBasename}", "--network", "bl-${localWorkspaceFolderBasename}", "--compose-service", "web", "--compose-override", ".devcontainer/berthlight.compose.yml", "-C", "${localWorkspaceFolder}", "8080"]
+}

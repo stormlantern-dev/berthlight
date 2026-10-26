@@ -84,6 +84,26 @@ jobs:
         run: |
           command -v podman || { sudo apt-get update && sudo apt-get install -y podman; }
           podman version
+      # PRD 0041: Compose devcontainers. Podman runs Docker Compose v2 as its
+      # Compose provider, which talks to Podman's API socket; start one for
+      # the job, where podman compose looks for it.
+      - name: Compose provider and Podman API socket
+        if: matrix.runtime == 'podman'
+        run: |
+          provider=$(command -v docker-compose || ls /usr/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null | head -1 || true)
+          test -n "$provider" || { echo "::error::no Docker Compose v2 on the runner"; exit 1; }
+          mkdir -p ~/.config/containers/containers.conf.d
+          printf '[engine]\ncompose_providers = ["%s"]\ncompose_warning_logs = false\n' "$provider" > ~/.config/containers/containers.conf.d/50-compose.conf
+          sock=$(podman info --format '{{.Host.RemoteSocket.Path}}')
+          mkdir -p "$(dirname "$sock")"
+          nohup podman system service --time=0 "unix://$sock" > "$RUNNER_TEMP/podman-service.log" 2>&1 &
+          for _ in $(seq 50); do test -S "$sock" && break; sleep 0.2; done
+          test -S "$sock" || { cat "$RUNNER_TEMP/podman-service.log"; exit 1; }
+          echo "DOCKER_HOST=unix://$sock" >> "$GITHUB_ENV"
+          DOCKER_HOST="unix://$sock" podman compose version
+      - name: Compose version
+        if: matrix.runtime == 'docker'
+        run: docker compose version
       # Rootless Podman cannot load kernel modules from its user namespace;
       # load the NAT ones its port forwarding needs.
       - name: Load NAT modules
