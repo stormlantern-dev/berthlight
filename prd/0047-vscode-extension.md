@@ -90,6 +90,20 @@ Code first, with VSCodium (Open VSX) as a SHOULD.
   [vscodium-devpodcontainers](https://codeberg.org/3timeslazy/vscodium-devpodcontainers)).
   The operator's own containers carry a `codium-devcontainer-…` name, so
   this matters to the first consumer.
+- **The operator's VSCodium uses Codium Devcontainer, which ignores
+  berthlight's wiring.** Found on the operator's machine on 2026-10-26: the
+  extension is `ddorch.codium-devcontainer` 0.3.1
+  ([source](https://github.com/DDorch/codium-devcontainer)). It does not use
+  the Dev Container CLI. It builds its own image from `image`, runs
+  `docker run -d --name codium-devcontainer-<folder> -p 127.0.0.1:<random>:22
+  -v <folder>:/workspace/<folder> …`, and opens the container over Remote
+  SSH. Its README lists the fields it reads (`image`, `remoteUser`,
+  `postCreateCommand`, `postStartCommand`) and says "Runtime settings like
+  `mounts`, `runArgs`, … are not applied". So neither `initializeCommand` nor
+  `runArgs` takes effect, and no route or network is set up. The operator's
+  current devcontainer (investor-buddy) runs through the Dev Container CLI
+  instead; the Codium Devcontainer container had been stopped for six
+  months.
 
 Not verified:
 
@@ -187,9 +201,13 @@ GitHub Actions. Open VSX publishing follows the same rule, or waits.
 - *Verify release credentials* covers the federation.
 
 **V8 (SHOULD). VSCodium.** The extension is published on Open VSX and works in
-VSCodium. Container windows work through whichever devcontainer extension
-VSCodium uses, as far as V1's host-folder detection allows.
-*Fit:* checked by hand by the operator in VSCodium; recorded on #47.
+VSCodium. For Codium Devcontainer, which ignores `runArgs` and
+`initializeCommand`, it offers to attach the running
+`codium-devcontainer-<folder>` container to the route (#49). Its windows are
+Remote SSH windows, so V1 finds the host folder from that container's bind
+mount.
+*Fit:* checked by hand by the operator in VSCodium with Codium Devcontainer:
+the URL appears and answers; recorded on #47.
 
 **V9 (MAY). Harbour in the editor.** A webview panel with Harbour's harbour
 (0045), from bundled assets, with no listening port and a strict CSP.
@@ -230,9 +248,10 @@ identity, not a stored token (V7).
 
 - **The host folder of a container window** (V1). *Settled by:* phase 1, by
   testing the remote authority and the container label.
-- **VSCodium and its devcontainer extension.** Which extension the operator
-  uses to open containers in VSCodium, and whether V1 can work with it.
-  *Settled by:* the operator; a phase 3 trial.
+- **VSCodium and Codium Devcontainer.** The extension is known (see
+  Evidence); what is open is attaching its container (#49), and whether the
+  operator wants Codium Devcontainer or the Dev Container CLI in VSCodium.
+  *Settled by:* #49, then a phase 3 trial.
 - **Open VSX without a stored token.** *Settled by:* research before phase
   3; until then Open VSX waits, rather than storing a token.
 - **Suppressing VS Code's port forwarding for wired ports** (`forwardPorts`,
