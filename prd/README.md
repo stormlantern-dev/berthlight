@@ -23,3 +23,5 @@ parallel never collide.
 |---|---|---|
 | [berthlight: stable names for devcontainer dev servers](0001-berthlight.md) | Accepted | #1 |
 | [Docker Compose devcontainers](0041-compose.md) | Accepted | #41 |
+| [Harbour: an optional graphical UI](0045-harbour-ui.md) | Accepted | #45 |
+| [A VS Code extension for berthlight](0047-vscode-extension.md) | Proposed | #47 |

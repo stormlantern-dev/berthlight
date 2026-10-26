@@ -1,5 +1,12 @@
 # berthlight
 
+[![CI](https://github.com/stormlantern-dev/berthlight/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stormlantern-dev/berthlight/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/stormlantern-dev/berthlight)](https://github.com/stormlantern-dev/berthlight/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/stormlantern.nl/berthlight.svg)](https://pkg.go.dev/stormlantern.nl/berthlight)
+[![Go](https://img.shields.io/github/go-mod/go-version/stormlantern-dev/berthlight)](go.mod)
+[![License](https://img.shields.io/github/license/stormlantern-dev/berthlight)](LICENSE)
+[![Signed releases](https://img.shields.io/badge/releases-cosign%20%2B%20provenance-2ea44f)](#install)
+
 Stable names for devcontainer dev servers, without published ports.
 
 ```
