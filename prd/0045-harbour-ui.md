@@ -1,6 +1,7 @@
 # Harbour: an optional graphical UI
 
-- **Status:** Proposed
+- **Status:** Accepted: a local web UI, as an extra option next to the CLI. Decided
+  by the operator, 2026-10-26
 - **Date:** 2026-10-26
 - **Tracking issue:** #45, which holds the test plan and the verification record
 - **Builds on:** [0001](0001-berthlight.md) (R2 security, R6 status, R12
@@ -64,7 +65,8 @@ proxy (see "What was ruled out").
   CLI or the editor.
 - **Remote or shared access.** No LAN, no other machines, no other users of
   this machine.
-- **A native app, tray icon or editor extension.** See "What was ruled out".
+- **A native app or tray icon.** See "What was ruled out". An editor
+  extension has its own PRD.
 - **Themes.** One look: Harbour's. Reduced motion is an accessibility
   setting, not a theme.
 
