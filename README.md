@@ -165,6 +165,24 @@ skill that teaches Claude Code, Codex, OpenCode and pi how, including the dev
 server settings, docs and OAuth redirect URIs around it. Add `--project` to
 put it in the repository for everyone working on it.
 
+The AI assistant in your editor can ask berthlight directly. `berthlight
+mcp` is an MCP server on stdio with three read-only tools: `url` (a
+worktree's URL, and whether it answers), `status` and `ls`. Because they
+only read, an editor can allow them once. `berthlight mcp config zed`
+prints the entry for Zed's settings.json:
+
+```json
+{
+  "context_servers": {
+    "berthlight": { "command": "/usr/bin/berthlight", "args": ["mcp"], "env": {} }
+  }
+}
+```
+
+For Claude Code, `berthlight mcp config claude` prints the `claude mcp add`
+command. Other MCP clients (VS Code, Cursor) take the same command and
+argument.
+
 `berthlight help` lists the commands, and `berthlight <command> --help`
 says what one does, with examples.
 

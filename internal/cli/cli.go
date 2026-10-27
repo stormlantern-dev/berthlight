@@ -232,6 +232,8 @@ Commands:
   cert --install-timer         renew daily (systemd user timer, or launchd on macOS)
   skill install                install the agent skill for Claude Code, Codex, OpenCode and pi
                                (skill uninstall removes it, skill show prints it)
+  mcp                          serve status, url and ls to an editor's AI assistant (MCP, stdio)
+                               (mcp config zed|claude prints the settings)
   completion <shell>           print shell completion: bash, zsh, fish, powershell or nushell
   demo                         play the header animation
   version                      print the version
@@ -286,7 +288,7 @@ func wantsHeader(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "url", "proxy", "help", "completion", "__complete", "__completeNoDesc":
+	case "url", "proxy", "mcp", "help", "completion", "__complete", "__completeNoDesc":
 		return false
 	case "skill":
 		return len(args) < 2 || args[1] != "show"

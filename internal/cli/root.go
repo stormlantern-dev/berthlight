@@ -85,7 +85,7 @@ container network.`,
 	root.AddCommand(
 		newAddCmd(), newRmCmd(), newLsCmd(), newStatusCmd(), newDevcontainerCmd(),
 		newUpCmd(), newDownCmd(), newURLCmd(), newCertCmd(), newSkillCmd(),
-		newDemoCmd(), newVersionCmd(), newCompletionCmd(), newProxyCmd(),
+		newDemoCmd(), newMCPCmd(), newVersionCmd(), newCompletionCmd(), newProxyCmd(),
 	)
 	root.InitDefaultHelpCmd()
 	for _, c := range root.Commands() {

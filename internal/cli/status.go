@@ -73,7 +73,7 @@ func runStatus(asJSON, watch bool, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	chk := status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases, HTTPS: scheme(c) == "https"}
+	chk := newChecker(c, run)
 	check := func(ctx context.Context) (status.Report, error) {
 		tab, err := route.Load(c.StateDir)
 		if err != nil {
@@ -127,18 +127,27 @@ func newRouteJSON(c Config, r route.Route) routeJSON {
 	return routeJSON{Name: r.Name, URL: urlFor(c, r.Name), Target: r.Target, Port: r.Port, Network: r.Network()}
 }
 
-func statusJSON(c Config, rep status.Report) any {
-	type proxyJSON struct {
-		Name    string `json:"name"`
-		Port    int    `json:"port"`
-		OK      bool   `json:"ok"`
-		Problem string `json:"problem,omitempty"`
-	}
-	out := struct {
-		OK     bool        `json:"ok"`
-		Proxy  proxyJSON   `json:"proxy"`
-		Routes []routeJSON `json:"routes"`
-	}{
+func newChecker(c Config, run rt.Runtime) status.Checker {
+	return status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases, HTTPS: scheme(c) == "https"}
+}
+
+// proxyJSON is the proxy in `status --json`.
+type proxyJSON struct {
+	Name    string `json:"name"`
+	Port    int    `json:"port"`
+	OK      bool   `json:"ok"`
+	Problem string `json:"problem,omitempty"`
+}
+
+// statusOut is `status --json`, and the MCP status tool's result.
+type statusOut struct {
+	OK     bool        `json:"ok"`
+	Proxy  proxyJSON   `json:"proxy"`
+	Routes []routeJSON `json:"routes"`
+}
+
+func statusJSON(c Config, rep status.Report) statusOut {
+	out := statusOut{
 		OK:     rep.OK(),
 		Proxy:  proxyJSON{Name: c.ProxyName, Port: c.Port, OK: rep.Proxy == "", Problem: rep.Proxy},
 		Routes: []routeJSON{},
