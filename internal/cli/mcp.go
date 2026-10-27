@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -154,7 +155,7 @@ func urlInfo(ctx context.Context, dir string) (urlOut, error) {
 		return urlOut{}, err
 	}
 	fi, err := os.Stat(abs)
-	if err != nil && filepath.IsAbs(dir) {
+	if err != nil && path.IsAbs(filepath.ToSlash(dir)) {
 		// A path from inside a devcontainer, as an editor's assistant sees
 		// it: find the host directory mounted there.
 		if host, ok, merr := containerToHost(dir); merr != nil {
@@ -224,11 +225,12 @@ func containerToHost(dir string) (string, bool, error) {
 // destination. Where containers disagree, one on a berthlight network
 // wins; if that does not settle it, it is an error rather than a guess.
 func hostPath(dir string, mounts []rt.BindMount) (string, bool, error) {
-	dir = filepath.Clean(dir)
+	// Container paths are POSIX paths, whatever the host is.
+	dir = path.Clean(dir)
 	best := 0
 	var hits []rt.BindMount
 	for _, m := range mounts {
-		d := filepath.Clean(m.Destination)
+		d := path.Clean(m.Destination)
 		if d == "/" || (dir != d && !strings.HasPrefix(dir, d+"/")) {
 			continue
 		}
@@ -246,7 +248,7 @@ func hostPath(dir string, mounts []rt.BindMount) (string, bool, error) {
 			if !only(m) {
 				continue
 			}
-			p := filepath.Join(m.Source, strings.TrimPrefix(dir, filepath.Clean(m.Destination)))
+			p := filepath.Join(m.Source, filepath.FromSlash(strings.TrimPrefix(dir, path.Clean(m.Destination))))
 			if _, seen := paths[p]; !seen {
 				order = append(order, p)
 			}

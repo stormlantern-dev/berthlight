@@ -266,14 +266,14 @@ func TestHostPath(t *testing.T) {
 		"/workspaces/site":               "/home/u/four/site",
 	} {
 		got, ok, err := hostPath(dir, mounts)
-		if err != nil || !ok || got != want {
+		if err != nil || !ok || got != filepath.FromSlash(want) {
 			t.Errorf("%s: %q %v %v, want %s", dir, got, ok, err, want)
 		}
 	}
 	if _, ok, err := hostPath("/srv/other", mounts); ok || err != nil {
 		t.Errorf("unmounted dir: %v %v", ok, err)
 	}
-	if _, _, err := hostPath("/workspaces/app", mounts); err == nil || !strings.Contains(err.Error(), "/home/u/one/app") {
+	if _, _, err := hostPath("/workspaces/app", mounts); err == nil || !strings.Contains(err.Error(), filepath.FromSlash("/home/u/one/app")) {
 		t.Errorf("ambiguous dir: %v", err)
 	}
 	if _, _, err := hostPath("/workspaces/webshopper", mounts); err != nil {
