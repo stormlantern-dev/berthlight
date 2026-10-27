@@ -25,3 +25,4 @@ parallel never collide.
 | [Docker Compose devcontainers](0041-compose.md) | Accepted | #41 |
 | [Harbour: an optional graphical UI](0045-harbour-ui.md) | Accepted | #45 |
 | [A VS Code extension for berthlight](0047-vscode-extension.md) | Proposed | #47 |
+| [An MCP server for berthlight](0051-mcp-server.md) | Proposed | #51 |
