@@ -8,7 +8,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,7 +58,7 @@ settings.`,
 }
 
 type urlIn struct {
-	Dir string `json:"dir,omitempty" jsonschema:"absolute path of a directory inside the git worktree, usually the project you work in; default: the directory the editor started the server in"`
+	Dir string `json:"dir,omitempty" jsonschema:"absolute path of a directory inside the git worktree, usually the project you work in; a path inside a running devcontainer works too; default: the directory the editor started the server in"`
 }
 
 // urlOut is the url tool's result.
@@ -151,7 +154,18 @@ func urlInfo(ctx context.Context, dir string) (urlOut, error) {
 	if err != nil {
 		return urlOut{}, err
 	}
-	if fi, err := os.Stat(abs); err != nil {
+	fi, err := os.Stat(abs)
+	if err != nil && path.IsAbs(filepath.ToSlash(dir)) {
+		// A path from inside a devcontainer, as an editor's assistant sees
+		// it: find the host directory mounted there.
+		if host, ok, merr := containerToHost(dir); merr != nil {
+			return urlOut{}, merr
+		} else if ok {
+			abs = host
+			fi, err = os.Stat(abs)
+		}
+	}
+	if err != nil {
 		return urlOut{}, fmt.Errorf("dir %s: %w", dir, err)
 	} else if !fi.IsDir() {
 		return urlOut{}, fmt.Errorf("dir %s is not a directory", dir)
@@ -191,6 +205,74 @@ func urlInfo(ctx context.Context, dir string) (urlOut, error) {
 		out.OK, out.Detail = &ok, rep.Routes[0].Detail
 	}
 	return out, nil
+}
+
+// containerToHost finds the host directory behind a path inside a running
+// container. ok is false when no container mounts it.
+func containerToHost(dir string) (string, bool, error) {
+	run, err := rt.Detect()
+	if err != nil {
+		return "", false, nil
+	}
+	mounts, err := run.BindMounts()
+	if err != nil {
+		return "", false, nil
+	}
+	return hostPath(dir, mounts)
+}
+
+// hostPath maps dir through the bind mount with the longest matching
+// destination. Where containers disagree, one on a berthlight network
+// wins; if that does not settle it, it is an error rather than a guess.
+func hostPath(dir string, mounts []rt.BindMount) (string, bool, error) {
+	// Container paths are POSIX paths, whatever the host is.
+	dir = path.Clean(dir)
+	best := 0
+	var hits []rt.BindMount
+	for _, m := range mounts {
+		d := path.Clean(m.Destination)
+		if d == "/" || (dir != d && !strings.HasPrefix(dir, d+"/")) {
+			continue
+		}
+		switch {
+		case len(d) > best:
+			best, hits = len(d), []rt.BindMount{m}
+		case len(d) == best:
+			hits = append(hits, m)
+		}
+	}
+	pick := func(only func(rt.BindMount) bool) (map[string][]string, []string) {
+		paths := map[string][]string{}
+		var order []string
+		for _, m := range hits {
+			if !only(m) {
+				continue
+			}
+			p := filepath.Join(m.Source, filepath.FromSlash(strings.TrimPrefix(dir, path.Clean(m.Destination))))
+			if _, seen := paths[p]; !seen {
+				order = append(order, p)
+			}
+			paths[p] = append(paths[p], m.Container)
+		}
+		return paths, order
+	}
+	paths, order := pick(func(rt.BindMount) bool { return true })
+	if len(order) > 1 {
+		if p, o := pick(func(m rt.BindMount) bool { return slices.ContainsFunc(m.Networks, rt.IsRouteNetwork) }); len(o) > 0 {
+			paths, order = p, o
+		}
+	}
+	switch len(order) {
+	case 0:
+		return "", false, nil
+	case 1:
+		return order[0], true, nil
+	}
+	var which []string
+	for _, p := range order {
+		which = append(which, fmt.Sprintf("%s (%s)", p, strings.Join(paths[p], ", ")))
+	}
+	return "", false, fmt.Errorf("dir %s is mounted from more than one host directory: %s; pass the host path", dir, strings.Join(which, "; "))
 }
 
 // MCP client settings (M6). Printed, never written: the editor's config
