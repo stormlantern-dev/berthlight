@@ -10,5 +10,14 @@
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
+  // Claude's login and settings live in a named volume, so a rebuilt
+  // container, or another worktree's, does not ask to log in again. Other
+  // projects can mount the same volume to share the one login.
+  "mounts": [
+    { "source": "claude-code-config", "target": "/root/.claude", "type": "volume" }
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/root/.claude"
+  },
   "postCreateCommand": "go mod download"
 }
