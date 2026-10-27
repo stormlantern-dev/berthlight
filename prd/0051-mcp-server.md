@@ -1,6 +1,7 @@
 # An MCP server for berthlight
 
-- **Status:** Proposed
+- **Status:** Accepted: build it, phase 1 first. Decided by the operator,
+  2026-10-27
 - **Date:** 2026-10-27
 - **Tracking issue:** #51, which holds the test plan and the verification record
 - **Builds on:** [0001](0001-berthlight.md) (R6 status, the agent skill),
@@ -89,8 +90,12 @@ on top of the agent skill (see "What was ruled out").
   these types.
 - **The working directory is not known to the server.** An MCP client starts
   the server once, in a directory of its choosing. Tools that are about "this
-  worktree" take a `dir` argument, and the server falls back to MCP roots when
-  the client offers them.
+  worktree" take a `dir` argument, defaulting to that directory. MCP roots
+  are no way out: the SDK refuses `roots/list` "while serving a request on
+  protocol version 2026-07-28" (SEP-2322), and the roots feature is
+  deprecated by SEP-2577 (the SDK's `ClientCapabilities.RootsV2` comment).
+  The `url` tool's description asks the assistant to pass the worktree's
+  path. *Found while building phase 1.*
 
 ## What was ruled out
 
@@ -153,8 +158,7 @@ the process.
 **M2 (MUST). Read-only tools.**
 - `status`: the proxy and every route with health, the same data as
   `status --json`.
-- `url`: given `dir` (default: the first MCP root, or the server's working
-  directory), the route's name, URL and health, resolved like `berthlight url`
+- `url`: given `dir` (default: the server's working directory), the route's name, URL and health, resolved like `berthlight url`
   in that directory, including `--project` from devcontainer.json (#26).
 - `ls`: the routes, like `ls --json`.
 
@@ -237,8 +241,9 @@ route goes up or down, reusing `status --watch`.
 - **Does Zed's assistant run the server with a dev container open, and does
   `dir` resolve to the host path?** Owner: Claude, with the operator's Zed.
   Settled by the first test in #51.
-- **Roots support per client.** Which clients send MCP roots, so `dir` can be
-  left out? Owner: Claude, when building phase 1.
+- **Roots support per client.** Settled while building phase 1: roots are
+  deprecated (see "Constraints and evidence"), so `dir` defaults to the
+  server's working directory.
 
 ## What would change this plan
 
