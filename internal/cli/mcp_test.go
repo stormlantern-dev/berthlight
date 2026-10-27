@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"stormlantern.nl/berthlight/internal/route"
+	rt "stormlantern.nl/berthlight/internal/runtime"
 )
 
 // TestMain lets a test run this test binary as `berthlight mcp`, so the
@@ -239,5 +240,43 @@ func TestMCPConfig(t *testing.T) {
 	}
 	if err := writeMCPConfig(&bytes.Buffer{}, "vim", "x"); err == nil {
 		t.Error("unknown client accepted")
+	}
+}
+
+func TestHostPath(t *testing.T) {
+	m := func(c, src, dst string, nets ...string) rt.BindMount {
+		return rt.BindMount{Container: c, Source: src, Destination: dst, Networks: nets}
+	}
+	mounts := []rt.BindMount{
+		m("shop", "/home/u/webshop", "/workspaces/webshop", "bl-webshop"),
+		m("shop", "/home/u/.kube", "/root/.kube"),
+		m("old", "/home/u/webshop", "/workspaces/webshop"),
+		m("fix", "/home/u/webshop/.worktrees/fix", "/workspaces/.worktrees/fix", "bl-fix"),
+		m("fix", "/home/u/webshop/.git", "/workspaces/.git", "bl-fix"),
+		m("a", "/home/u/one/app", "/workspaces/app", "bl-app"),
+		m("b", "/home/u/two/app", "/workspaces/app", "bl-app-2"),
+		m("c", "/home/u/three/site", "/workspaces/site"),
+		m("d", "/home/u/four/site", "/workspaces/site", "bl-site"),
+		m("root", "/home/u", "/"),
+	}
+	for dir, want := range map[string]string{
+		"/workspaces/webshop":            "/home/u/webshop",
+		"/workspaces/webshop/src/":       "/home/u/webshop/src",
+		"/workspaces/.worktrees/fix/web": "/home/u/webshop/.worktrees/fix/web",
+		"/workspaces/site":               "/home/u/four/site",
+	} {
+		got, ok, err := hostPath(dir, mounts)
+		if err != nil || !ok || got != want {
+			t.Errorf("%s: %q %v %v, want %s", dir, got, ok, err, want)
+		}
+	}
+	if _, ok, err := hostPath("/srv/other", mounts); ok || err != nil {
+		t.Errorf("unmounted dir: %v %v", ok, err)
+	}
+	if _, _, err := hostPath("/workspaces/app", mounts); err == nil || !strings.Contains(err.Error(), "/home/u/one/app") {
+		t.Errorf("ambiguous dir: %v", err)
+	}
+	if _, _, err := hostPath("/workspaces/webshopper", mounts); err != nil {
+		t.Errorf("prefix that is not a path: %v", err)
 	}
 }
