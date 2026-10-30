@@ -143,13 +143,8 @@ homebrew_casks:
     commit_author:
       name: berthlight release
       email: noreply@stormlantern.nl
-    # The binary is not notarised; without this, macOS refuses to run it.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/berthlight"]
-          end
+    # No quarantine workaround: the macOS binary is signed and notarized
+    # (#58), so it runs with the quarantine Homebrew puts on it.
 
 scoops:
   - name: berthlight
