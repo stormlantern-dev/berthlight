@@ -73,7 +73,7 @@ const slow = 200 * time.Millisecond
 // last frame drawn is the scene's last.
 func TestHeaderStopOnSlowLink(t *testing.T) {
 	w := &slowWriter{delay: slow}
-	h := startKitty(w, false, false, nil)
+	h := startKitty(w, 0, 0, false, false, nil)
 	time.Sleep(5*slow + slow/2)
 	begin := time.Now()
 	h.Stop()
@@ -92,7 +92,7 @@ func TestHeaderStopOnSlowLink(t *testing.T) {
 // frame starts after the output is asked for, and none after it.
 func TestHeaderOutputWaitsForOneFrame(t *testing.T) {
 	w := &slowWriter{delay: slow}
-	h := startKitty(w, false, false, nil)
+	h := startKitty(w, 0, 0, false, false, nil)
 	time.Sleep(3*slow + slow/3)
 	asked := time.Now()
 	io.WriteString(h.Wrap(w), "NAME  URL\n")
@@ -124,7 +124,7 @@ func TestHeaderOutputWaitsForOneFrame(t *testing.T) {
 func TestHeaderDropsFrames(t *testing.T) {
 	w := &slowWriter{delay: slow}
 	begin := time.Now()
-	h := startKitty(w, false, false, nil)
+	h := startKitty(w, 0, 0, false, false, nil)
 	h.Play(context.Background())
 	if took := time.Since(begin); took > SceneLength+4*slow {
 		t.Errorf("the scene took %v on a slow terminal; frames queue up", took)
@@ -157,7 +157,7 @@ func TestHeaderFallsBack(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &slowWriter{delay: tc.delay, buffered: tc.buffered}
-			h := startKitty(w, true, tc.auto, nil)
+			h := startKitty(w, 0, 0, true, tc.auto, nil)
 			// Past the first second, and past the buffer by more than
 			// fallbackFrames writes. Rendering an Amiga frame takes up to
 			// 100 ms under the race detector on CI, so wait for writes,
@@ -257,7 +257,7 @@ func TestHeaderWatchesTheLink(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l := &fakeLink{rate: tc.rate}
-			h := startKitty(l, true, true, l.backlog)
+			h := startKitty(l, 0, 0, true, true, l.backlog)
 			time.Sleep(2500 * time.Millisecond)
 			io.WriteString(h.Wrap(l), "NAME  URL\n")
 			if most := linkSlack + 2*amigaFrame; l.atOutput > most {
@@ -280,7 +280,7 @@ func TestHeaderWatchesTheLink(t *testing.T) {
 // Stop draws the last frame at once.
 func TestHeaderStopDoesNotWaitForTheLink(t *testing.T) {
 	l := &fakeLink{rate: 0}
-	h := startKitty(l, true, true, l.backlog)
+	h := startKitty(l, 0, 0, true, true, l.backlog)
 	time.Sleep(300 * time.Millisecond)
 	begin := time.Now()
 	h.Stop()

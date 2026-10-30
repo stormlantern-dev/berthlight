@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	xterm "golang.org/x/term"
 )
@@ -78,6 +79,9 @@ type Header struct {
 	id    uint32 // Kitty image id
 	start time.Time
 
+	// The terminal's size when the header started; 0 if not known.
+	rows, cols int
+
 	// mu serializes writes to w (frames and Print) and guards below.
 	mu    sync.Mutex
 	below int // rows printed under the header by Print
@@ -137,7 +141,7 @@ func StartHeader(w io.Writer, version string) *Header {
 		}
 		// Make room, then animate in it.
 		fmt.Fprint(f, strings.Repeat("\n", HeaderRows))
-		return startKitty(f, hi, auto, backlog)
+		return startKitty(f, rows, cols, hi, auto, backlog)
 	}
 	// Already on its last frame.
 	h := &Header{w: f, mode: mode, last: true, done: make(chan struct{})}
@@ -159,12 +163,12 @@ func sceneChoice(v string) (hi, auto bool) {
 }
 
 // startKitty starts animating the scene in the HeaderRows rows above the
-// cursor on w: the Amiga one if hi, falling back to the chunky one on a
-// slow link if auto. backlog, if not nil, reports the bytes on their way
-// to the terminal.
-func startKitty(w io.Writer, hi, auto bool, backlog func() (int, bool)) *Header {
+// cursor on w, a terminal of rows by cols cells (0 if not known): the
+// Amiga one if hi, falling back to the chunky one on a slow link if auto.
+// backlog, if not nil, reports the bytes on their way to the terminal.
+func startKitty(w io.Writer, rows, cols int, hi, auto bool, backlog func() (int, bool)) *Header {
 	h := &Header{
-		w: w, mode: modeKitty, id: rand.Uint32N(1<<31-2) + 1, start: time.Now(),
+		w: w, mode: modeKitty, id: rand.Uint32N(1<<31-2) + 1, start: time.Now(), rows: rows, cols: cols,
 		hi: hi, auto: hi && auto, backlog: backlog,
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 	}
@@ -333,16 +337,41 @@ func (h *Header) Play(ctx context.Context) {
 	h.Stop()
 }
 
-// Print writes text under the header without stopping it; the header keeps
-// animating above it. The text's lines must fit the terminal's width.
+// Print writes text under the header; the header keeps animating above
+// it. If the text would push the header's top row off the screen, the
+// header stops on its last frame first: a frame drawn after that would
+// land on the text, since the cursor cannot move above the screen.
 func (h *Header) Print(text string) {
 	if h == nil {
 		return
 	}
+	n := textRows(text, h.cols)
+	h.mu.Lock()
+	// The cursor ends on the bottom row at worst, so the header's top row
+	// stays on screen while the rows above the cursor hold it all.
+	fits := h.rows == 0 || HeaderRows+h.below+n < h.rows
+	h.mu.Unlock()
+	if !fits {
+		h.Stop()
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	io.WriteString(h.w, text)
-	h.below += strings.Count(text, "\n")
+	h.below += n
+}
+
+// textRows is the number of rows text moves the cursor down on a terminal
+// cols wide (0: lines never wrap). It counts runes, so wide characters and
+// escape sequences are not measured.
+func textRows(text string, cols int) int {
+	lines := strings.Split(text, "\n")
+	n := len(lines) - 1
+	for _, l := range lines {
+		if w := utf8.RuneCountInString(l); cols > 0 && w > cols {
+			n += (w - 1) / cols
+		}
+	}
+	return n
 }
 
 // Wrap returns a writer that stops the header before its first write, so a

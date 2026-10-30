@@ -159,7 +159,7 @@ func TestKittyImage(t *testing.T) {
 // makes one for a Kitty terminal.
 // It draws the chunky scene.
 func testHeader(buf io.Writer) *Header {
-	return startKitty(buf, false, false, nil)
+	return startKitty(buf, 0, 0, false, false, nil)
 }
 
 type lockedBuffer struct {
@@ -258,5 +258,51 @@ func TestStory(t *testing.T) {
 	bx, by := boatPos(end)
 	if bx != dockedX || by+len(boat)-1 != waterY || bx+len(boat[0]) > jettyX {
 		t.Errorf("the boat ends at (%d, %d), not moored on the waterline before the pier", bx, by)
+	}
+}
+
+// TestHeaderPrintInASmallTerminal: text that would scroll the header's top
+// row off the screen stops it on its last frame first, so no frame lands
+// on the text. Text that fits leaves it animating.
+func TestHeaderPrintInASmallTerminal(t *testing.T) {
+	text := strings.Repeat("usage\n", 20)
+	var buf lockedBuffer
+	h := startKitty(&buf, HeaderRows+20, 80, false, false, nil)
+	h.Print(text)
+	s := buf.String()
+	if !strings.HasSuffix(s, "\x1b8\x1b[?2026l"+text) {
+		t.Errorf("the last frame does not come right before the text: %q", s[max(0, len(s)-80):])
+	}
+	time.Sleep(3 * frameInterval)
+	if buf.String() != s {
+		t.Error("the header drew over the text")
+	}
+
+	var fit lockedBuffer
+	h = startKitty(&fit, HeaderRows+21, 80, false, false, nil)
+	h.Print(text)
+	time.Sleep(3 * frameInterval)
+	h.Stop()
+	if !strings.Contains(fit.String(), fmt.Sprintf("\x1b7\x1b[%dA\r\x1b_G", HeaderRows+20)) {
+		t.Error("the header stopped though the text fits")
+	}
+}
+
+func TestTextRows(t *testing.T) {
+	for _, tc := range []struct {
+		text       string
+		cols, want int
+	}{
+		{"a\nb\n", 0, 2},
+		{"a\nb\n", 80, 2},
+		{strings.Repeat("x", 80) + "\n", 80, 1},
+		{strings.Repeat("x", 81) + "\n", 80, 2},
+		{strings.Repeat("x", 161) + "\n\n", 80, 4},
+		{"no newline", 80, 0},
+		{strings.Repeat("x", 100), 40, 2},
+	} {
+		if got := textRows(tc.text, tc.cols); got != tc.want {
+			t.Errorf("textRows(%d bytes, %d) = %d, want %d", len(tc.text), tc.cols, got, tc.want)
+		}
 	}
 }
