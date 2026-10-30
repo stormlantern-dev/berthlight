@@ -3,9 +3,13 @@
 # proxy image, with signed checksums and build provenance. Then installs the
 # release the way users do and runs it, and submits it to winget (R10).
 #
-# No stored secrets. The tap and bucket token comes from the release GitHub
-# App, and the AUR push is signed with an SSH key; both keys live in Cloud
-# KMS and are used through Workload Identity Federation (.github/actions).
+# The tap and bucket token comes from the release GitHub App, and the AUR
+# push is signed with an SSH key; both keys live in Cloud KMS and are used
+# through Workload Identity Federation (.github/actions). The one stored
+# secrets are Apple's, for signing and notarizing the macOS binaries (#58):
+# they cannot be used from KMS, so they live in the `release` environment,
+# which only v* tags may deploy to. They are berthlight's own, not shared
+# with other projects.
 # Repository variables: TAP_APP_CLIENT_ID, TAP_WIF_PROVIDER,
 # TAP_KMS_KEY_VERSION and AUR_KMS_KEY_RING. AUR_ENABLED=true turns the AUR
 # on; without it the release publishes everything else.
@@ -34,6 +38,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Holds the Apple secrets; deployable from v* tags only.
+    environment: release
     permissions:
       contents: write # the GitHub release
       packages: write # the proxy image on ghcr.io
@@ -69,6 +75,24 @@ jobs:
         with:
           workload-identity-provider: ${{ vars.TAP_WIF_PROVIDER }}
           key-ring: ${{ vars.AUR_KMS_KEY_RING }}
+      # GoReleaser skips notarizing without the certificate, as snapshots
+      # do; a release must not.
+      - name: The Apple signing secrets are there
+        env:
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          missing=0
+          for v in MACOS_DEVELOPER_ID_P12 MACOS_DEVELOPER_ID_P12_PASSWORD NOTARY_API_KEY_P8 NOTARY_API_KEY_ID NOTARY_API_ISSUER_ID; do
+            if [ -z "${!v}" ]; then
+              echo "::error::secret $v is missing from the release environment (#58)"
+              missing=1
+            fi
+          done
+          exit "$missing"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3
@@ -77,6 +101,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           AUR_SSH_AGENT: ${{ steps.aur.outputs.agent }}
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
       # GoReleaser only writes the winget manifests; the winget jobs below
       # test and submit them.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -165,6 +194,17 @@ jobs:
       - run: |
           brew install stormlantern-dev/tap/berthlight
           berthlight version | grep -F "${GITHUB_REF_NAME#v}"
+      # Signed with the Developer ID, with the hardened runtime (#58).
+      - name: The binary is signed
+        if: runner.os == 'macOS'
+        run: |
+          bin=$(realpath "$(command -v berthlight)")
+          codesign --verify --strict --verbose=2 "$bin"
+          info=$(codesign -dv --verbose=4 "$bin" 2>&1)
+          echo "$info"
+          grep -q '^Authority=Developer ID Application' <<<"$info"
+          grep -q 'flags=.*runtime' <<<"$info"
+          spctl -a -vv -t install "$bin" || true
 
   install-scoop:
     needs: release
