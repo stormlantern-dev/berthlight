@@ -234,6 +234,16 @@ go test ./...
 go run ./cmd/berthlight url
 ```
 
+A berthlight built from source runs the proxy image
+`ghcr.io/stormlantern-dev/berthlight:edge`, which is rebuilt and signed on
+every push to `main`. To run your own proxy build instead, build the image
+and point `BERTHLIGHT_IMAGE` at it:
+
+```sh
+docker build -t localhost/berthlight:dev .
+BERTHLIGHT_IMAGE=localhost/berthlight:dev go run ./cmd/berthlight up
+```
+
 ## License
 
 [Apache-2.0](LICENSE)

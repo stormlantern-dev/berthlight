@@ -1,0 +1,151 @@
+# Publishes the proxy image ghcr.io/stormlantern-dev/berthlight:edge from
+# every push to main (#63). A berthlight built from main, or from any
+# untagged commit, runs that image by default (imageTag in internal/cli), so
+# a build from source starts a proxy without BERTHLIGHT_IMAGE.
+#
+# Like the release image: linux/amd64 and linux/arm64, from
+# Dockerfile.release, signed keyless with cosign and with build provenance.
+# The signature is bound to this workflow on main:
+#
+#   cosign verify ghcr.io/stormlantern-dev/berthlight:edge \
+#     --certificate-identity https://github.com/stormlantern-dev/berthlight/.github/workflows/edge.yml@refs/heads/main \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+name: Edge image
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "prd/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time, so edge only moves forward and `verify` sees this run's
+# image. A newer push waits rather than cancelling a half-signed push.
+concurrency:
+  group: edge
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/stormlantern-dev/berthlight
+
+jobs:
+  publish:
+    # Only main publishes edge; a dispatch from another branch does nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # the image on ghcr.io
+      id-token: write # keyless signature and attestation
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tags, for the pseudo-version Go stamps
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # No -X main.version: the binary reports the pseudo-version Go stamps
+      # from git, as `go install ...@main` does. The build context sits
+      # outside the checkout, which would otherwise count as dirty.
+      - name: Build the binaries
+        id: build
+        run: |
+          ctx="$RUNNER_TEMP/image"
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$ctx/linux/$arch/berthlight" ./cmd/berthlight
+          done
+          version=$("$ctx/linux/amd64/berthlight" version | awk '{print $2}')
+          echo "Version: $version"
+          echo "context=$ctx" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Dockerfile.release only copies the binary in, so no emulation.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: push
+        env:
+          CONTEXT: ${{ steps.build.outputs.context }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          docker buildx build --push \
+            --platform linux/amd64,linux/arm64 \
+            --file Dockerfile.release \
+            --tag "$IMAGE:edge" \
+            --label org.opencontainers.image.title="berthlight proxy" \
+            --label org.opencontainers.image.description="The berthlight proxy, routing *.localhost names to devcontainers. Development build from main." \
+            --label org.opencontainers.image.source=https://github.com/stormlantern-dev/berthlight \
+            --label org.opencontainers.image.version="$VERSION" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.licenses=Apache-2.0 \
+            --provenance=false \
+            --metadata-file "$RUNNER_TEMP/metadata.json" \
+            "$CONTEXT"
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/metadata.json")
+          test -n "$digest" && test "$digest" != null
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image
+        run: cosign sign --yes "$IMAGE@${{ steps.push.outputs.digest }}"
+      - name: Build provenance for the image
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  # #63: a berthlight built from this commit, with no BERTHLIGHT_IMAGE,
+  # starts a proxy from the edge image just published, on both
+  # architectures.
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: The edge image is signed by this workflow on main
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          cosign verify "$IMAGE@${{ needs.publish.outputs.digest }}" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF%@*}@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+      - name: A build from main starts the edge proxy
+        run: |
+          go build -o "$RUNNER_TEMP/bin/berthlight" ./cmd/berthlight
+          bl="$RUNNER_TEMP/bin/berthlight"
+          unset BERTHLIGHT_IMAGE
+          "$bl" version
+          "$bl" up --no-header
+          ref=$(docker inspect berthlight --format '{{.Config.Image}}')
+          test "$ref" = "$IMAGE:edge" || { echo "::error::the proxy runs $ref"; exit 1; }
+          digest=$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')
+          echo "proxy image: $digest"
+          test "${digest#*@}" = "${{ needs.publish.outputs.digest }}" || { echo "::error::the proxy runs $digest, not this run's edge image"; exit 1; }
+          docker run --rm --entrypoint /berthlight "$ref" version
+          "$bl" down --no-header
