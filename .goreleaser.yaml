@@ -1,12 +1,16 @@
 # Release configuration (PRD 0001, R9). The release workflow runs it on a
 # version tag; CI runs it as a snapshot on every pull request (R11).
 #
-# Publishing needs, from the release workflow (no stored secrets there; see
-# .github/actions):
+# Publishing needs, from the release workflow (see .github/actions):
 #   TAP_GITHUB_TOKEN  a one-hour release App token with contents: write on
 #                     stormlantern-dev/homebrew-tap and scoop-bucket
 #   AUR_SSH_AGENT     socket of an ssh-agent holding the AUR key, which lives
 #                     in Cloud KMS (.github/actions/aur-ssh)
+#   MACOS_DEVELOPER_ID_P12, MACOS_DEVELOPER_ID_P12_PASSWORD, NOTARY_API_KEY_P8,
+#   NOTARY_API_KEY_ID, NOTARY_API_ISSUER_ID
+#                     the Developer ID certificate and notary key that sign
+#                     and notarize the macOS binaries (#58), secrets of the
+#                     release environment
 version: 2
 
 project_name: berthlight
@@ -35,6 +39,28 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
+
+# The macOS binaries are signed with the Developer ID (hardened runtime) and
+# notarized, on Linux, before they are archived: the checksums, signatures,
+# provenance and cask all cover the signed binaries (#58). Snapshots, which
+# have no certificate, skip this; the release workflow refuses to run
+# without it. A bare binary carries no stapled ticket: Gatekeeper looks the
+# notarization up online.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_DEVELOPER_ID_P12" }}'
+      ids: [berthlight]
+      sign:
+        certificate: "{{ .Env.MACOS_DEVELOPER_ID_P12 }}"
+        password: "{{ .Env.MACOS_DEVELOPER_ID_P12_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.NOTARY_API_ISSUER_ID }}"
+        key_id: "{{ .Env.NOTARY_API_KEY_ID }}"
+        key: "{{ .Env.NOTARY_API_KEY_P8 }}"
+        # Fail the release unless Apple accepts both binaries. 20m is the
+        # most GoReleaser allows.
+        wait: true
+        timeout: 20m
 
 archives:
   - id: berthlight
