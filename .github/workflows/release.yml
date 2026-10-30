@@ -36,7 +36,72 @@ env:
   IMAGE: ghcr.io/stormlantern-dev/berthlight
 
 jobs:
+  # Before anything is published: build the darwin arm64 binary the way the
+  # release does, signed and notarized, and check on a Mac that it runs.
+  # v0.8.0 was notarized but killed on launch, which only the install job
+  # after publishing caught (#58).
+  macos-sign:
+    name: macOS signing (build)
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The Apple signing secrets are there
+        env:
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: .github/scripts/apple-secrets.sh
+      # `goreleaser build` runs the same sign and notarize step as a release.
+      # --skip=before: the hooks `go run` berthlight, which GOOS=darwin
+      # would build for the wrong system.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.3
+          args: build --snapshot --clean --single-target --id berthlight --skip=before
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-signed
+          path: dist/berthlight_darwin_arm64*/berthlight
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-smoke:
+    name: macOS signing (run)
+    needs: macos-sign
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-signed
+          path: signed
+      - name: Signed, notarized, and it runs
+        run: |
+          bin=$(find signed -type f -name berthlight)
+          chmod +x "$bin"
+          .github/scripts/macos-smoke.sh "$bin"
+
   release:
+    needs: macos-smoke
     runs-on: ubuntu-latest
     # Holds the Apple secrets; deployable from v* tags only.
     environment: release
@@ -84,34 +149,7 @@ jobs:
           NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
           NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
-        run: |
-          missing=0
-          for v in MACOS_DEVELOPER_ID_P12 MACOS_DEVELOPER_ID_P12_PASSWORD NOTARY_API_KEY_P8 NOTARY_API_KEY_ID NOTARY_API_ISSUER_ID; do
-            if [ -z "${!v}" ]; then
-              echo "::error::secret $v is missing from the release environment (#58)"
-              missing=1
-            fi
-          done
-          if [ "$missing" = 1 ]; then exit 1; fi
-          # The .p12 must hold the leaf certificate alone (as Keychain
-          # exports it), or the full chain up to Apple's root. With only
-          # the intermediate beside the leaf, quill takes the intermediate
-          # for the root and writes a designated requirement macOS 26 does
-          # not accept: the binary is killed on launch (v0.8.0, #58).
-          certs=$(base64 --decode <<<"$MACOS_DEVELOPER_ID_P12" |
-            openssl pkcs12 -nokeys -passin env:MACOS_DEVELOPER_ID_P12_PASSWORD 2>/dev/null |
-            grep -c 'BEGIN CERTIFICATE' || true)
-          root=$(base64 --decode <<<"$MACOS_DEVELOPER_ID_P12" |
-            openssl pkcs12 -nokeys -passin env:MACOS_DEVELOPER_ID_P12_PASSWORD 2>/dev/null |
-            grep -c 'subject=.*CN *= *Apple Root CA' || true)
-          if [ "$certs" = 0 ]; then
-            echo "::error::MACOS_DEVELOPER_ID_P12 cannot be opened with its password (#58)"
-            exit 1
-          fi
-          if [ "$certs" != 1 ] && [ "$root" = 0 ]; then
-            echo "::error::MACOS_DEVELOPER_ID_P12 holds $certs certificates without Apple's root: export the leaf certificate and key only (#58)"
-            exit 1
-          fi
+        run: .github/scripts/apple-secrets.sh
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3
@@ -213,17 +251,14 @@ jobs:
       - run: |
           brew install stormlantern-dev/tap/berthlight
           berthlight version | grep -F "${GITHUB_REF_NAME#v}"
-      # Signed with the Developer ID, with the hardened runtime (#58).
-      - name: The binary is signed
+      # Signed, notarized, and it runs, as installed (#58).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: runner.os == 'macOS'
-        run: |
-          bin=$(realpath "$(command -v berthlight)")
-          codesign --verify --strict --verbose=2 "$bin"
-          info=$(codesign -dv --verbose=4 "$bin" 2>&1)
-          echo "$info"
-          grep -q '^Authority=Developer ID Application' <<<"$info"
-          grep -q 'flags=.*runtime' <<<"$info"
-          spctl -a -vv -t install "$bin" || true
+        with:
+          persist-credentials: false
+      - name: The binary is signed and notarized
+        if: runner.os == 'macOS'
+        run: .github/scripts/macos-smoke.sh "$(realpath "$(command -v berthlight)")" "${GITHUB_REF_NAME#v}"
 
   install-scoop:
     needs: release
