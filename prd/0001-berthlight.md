@@ -282,10 +282,14 @@ GoReleaser:
   reference from its configuration, with the release's image as default, so
   a move of the registry or organisation needs no new release;
 - checksums signed with cosign (keyless) and GitHub build provenance
-  attestations.
+  attestations;
+- macOS binaries signed with a Developer ID and notarized, so they run from
+  a download or the cask without a quarantine workaround (#58, from v0.8.1).
 
 *Fit:* the release workflow does all of the above from a tag; CI installs the
-release with `brew`, `scoop` and `dpkg` and runs `berthlight version`.
+release with `brew`, `scoop` and `dpkg` and runs `berthlight version`. Before
+anything is published, a Mac runs a signed and notarized build and checks it
+with `codesign --verify --strict` and `spctl` (#58).
 
 **R10 (SHOULD). winget.** A winget manifest, submitted by the release workflow
 once the CLI is stable.

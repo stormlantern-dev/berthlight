@@ -1,4 +1,5 @@
-# Publishes a release from a version tag (PRD 0001, R9): binaries, packages,
+# Publishes a release from a version tag (PRD 0001, R9; RELEASING.md says how
+# to cut one and where the credentials live): binaries, packages,
 # the Homebrew cask, the Scoop manifest, the AUR package and the multi-arch
 # proxy image, with signed checksums and build provenance. Then installs the
 # release the way users do and runs it, and submits it to winget (R10).

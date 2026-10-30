@@ -38,7 +38,9 @@ Debian, Fedora and Alpine packages and plain archives are on each
 [release](https://github.com/stormlantern-dev/berthlight/releases). Every
 release has checksums signed with cosign and GitHub build provenance; the
 release notes say how to verify them. The proxy image,
-`ghcr.io/stormlantern-dev/berthlight:<version>`, is signed the same way.
+`ghcr.io/stormlantern-dev/berthlight:<version>`, is signed the same way. The
+macOS binaries are signed with a Developer ID and notarized by Apple, so a
+downloaded archive runs without a Gatekeeper warning (v0.8.1 and later).
 
 winget is on its way: `winget install Stormlantern.Berthlight` works once
 the package is accepted in
