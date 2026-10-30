@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -459,6 +460,10 @@ func up(c Config, run rt.Runtime, boat *tui.Progress) error {
 		if err := route.MakeDir(c.StateDir); err != nil {
 			return err
 		}
+		boat.Step(0.1, "getting the proxy image")
+		if err := run.PullImage(c.Image); err != nil {
+			return imageError(c.Image, os.Getenv("BERTHLIGHT_IMAGE") != "", err)
+		}
 		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases, Group: run.ProxyGroup()}
 		boat.Step(0.15, "starting the proxy")
 		if err := run.StartProxy(spec); err != nil {
@@ -484,6 +489,38 @@ func up(c Config, run rt.Runtime, boat *tui.Progress) error {
 	}
 	return nil
 }
+
+// imageError explains a proxy image that can't be had: one named by
+// BERTHLIGHT_IMAGE (fromEnv), the edge image of a development build, which
+// is not published (#63), or a release image the registry won't give.
+func imageError(image string, fromEnv bool, err error) error {
+	var why string
+	switch {
+	case fromEnv:
+		why = "BERTHLIGHT_IMAGE names it; set it to an image the runtime can pull or already has"
+	case strings.HasSuffix(image, ":edge"):
+		why = fmt.Sprintf("this is a development build (version %s), and the edge image for those isn't published yet (#63); "+
+			"set BERTHLIGHT_IMAGE to a released image, such as %s, or to one you built",
+			strings.Trim(currentVersion(), "()"), strings.TrimSuffix(image, ":edge")+":latest")
+	default:
+		why = "check the network and the registry, or set BERTHLIGHT_IMAGE to an image the runtime already has"
+	}
+	return &imageUnavailable{msg: fmt.Sprintf("the proxy image %s is not available: %s", image, why), err: err}
+}
+
+// imageUnavailable shows the runtime's last line of complaint under the
+// explanation: Podman prints a warning for each retry before it.
+type imageUnavailable struct {
+	msg string
+	err error
+}
+
+func (e *imageUnavailable) Error() string {
+	lines := strings.Split(strings.TrimSpace(e.err.Error()), "\n")
+	return e.msg + "\n" + strings.TrimSpace(lines[len(lines)-1])
+}
+
+func (e *imageUnavailable) Unwrap() error { return e.err }
 
 func waitForPort(port int, timeout time.Duration) error {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))

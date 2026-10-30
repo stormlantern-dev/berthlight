@@ -70,6 +70,15 @@ func (s ProxySpec) RunArgs(ipv6, gwPriority bool) []string {
 	return args
 }
 
+// PullImage makes sure image is there: present locally, or pulled now.
+func (r Runtime) PullImage(image string) error {
+	if _, err := r.Run("image", "inspect", image); err == nil {
+		return nil
+	}
+	_, err := r.Run("pull", "-q", image)
+	return err
+}
+
 // StartProxy creates the proxy's own network and runs the proxy on it. It
 // tries the most specific options first and falls back where the runtime
 // does not support them: gw-priority (Docker 28+) and a ::1 binding.
