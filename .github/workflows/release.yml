@@ -92,7 +92,26 @@ jobs:
               missing=1
             fi
           done
-          exit "$missing"
+          if [ "$missing" = 1 ]; then exit 1; fi
+          # The .p12 must hold the leaf certificate alone (as Keychain
+          # exports it), or the full chain up to Apple's root. With only
+          # the intermediate beside the leaf, quill takes the intermediate
+          # for the root and writes a designated requirement macOS 26 does
+          # not accept: the binary is killed on launch (v0.8.0, #58).
+          certs=$(base64 --decode <<<"$MACOS_DEVELOPER_ID_P12" |
+            openssl pkcs12 -nokeys -passin env:MACOS_DEVELOPER_ID_P12_PASSWORD 2>/dev/null |
+            grep -c 'BEGIN CERTIFICATE' || true)
+          root=$(base64 --decode <<<"$MACOS_DEVELOPER_ID_P12" |
+            openssl pkcs12 -nokeys -passin env:MACOS_DEVELOPER_ID_P12_PASSWORD 2>/dev/null |
+            grep -c 'subject=.*CN *= *Apple Root CA' || true)
+          if [ "$certs" = 0 ]; then
+            echo "::error::MACOS_DEVELOPER_ID_P12 cannot be opened with its password (#58)"
+            exit 1
+          fi
+          if [ "$certs" != 1 ] && [ "$root" = 0 ]; then
+            echo "::error::MACOS_DEVELOPER_ID_P12 holds $certs certificates without Apple's root: export the leaf certificate and key only (#58)"
+            exit 1
+          fi
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.3
