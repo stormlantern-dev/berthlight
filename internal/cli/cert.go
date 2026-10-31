@@ -257,7 +257,8 @@ func proxyReadsCerts(c Config, stderr io.Writer) error {
 	if err := run.RemoveContainer(c.ProxyName); err != nil {
 		return err
 	}
-	return up(c, run, nil)
+	_, err = up(c, run, nil)
+	return err
 }
 
 // loadEnvFile sets the variables in path that the environment does not

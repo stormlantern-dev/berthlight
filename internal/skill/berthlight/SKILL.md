@@ -169,6 +169,7 @@ Run `berthlight status`. Each problem has its own message:
 | nothing answers on 127.0.0.1:7480 | port mismatch: `berthlight down && berthlight up` |
 | network bl-... does not exist | start the devcontainer (its initializeCommand creates it) |
 | the proxy is not on network bl-... | `berthlight up` |
+| warning: the proxy runs <image>, but this berthlight wants <image> | after an upgrade: `berthlight up` replaces the proxy; the routes stay |
 | no container answers to "bl-..." | devcontainer not running, or runArgs missing: run step 3 again and rebuild |
 | the Compose service "..." is not on it | `dockerComposeFile` lacks `berthlight.compose.yml`: run step 3 again and rebuild |
 | nothing listens on port N | dev server not started, wrong port, or bound to 127.0.0.1 (step 4) |

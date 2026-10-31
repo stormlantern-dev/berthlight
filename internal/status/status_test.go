@@ -23,11 +23,13 @@ type fakeRuntime struct {
 	exists, running bool
 	proxyNets       []string
 	networks        map[string]bool
+	image           string
 }
 
 func (f fakeRuntime) ContainerState(string) (bool, bool)         { return f.exists, f.running }
 func (f fakeRuntime) ContainerNetworks(string) ([]string, error) { return f.proxyNets, nil }
 func (f fakeRuntime) NetworkExists(n string) bool                { return f.networks[n] }
+func (f fakeRuntime) ContainerImage(string) (string, error)      { return f.image, nil }
 
 // fakeProxy answers like the proxy would for each route name.
 func fakeProxy(t *testing.T) int {
@@ -255,5 +257,32 @@ func TestNoRoutes(t *testing.T) {
 	rep := checker(healthy(), fakeProxy(t)).Check(context.Background(), &route.Table{})
 	if !rep.OK() || len(rep.Routes) != 0 {
 		t.Errorf("%+v", rep)
+	}
+}
+
+// TestImageWarning (#70): a proxy on another image than this berthlight
+// wants gets a warning that names both and `berthlight up`; the report
+// stays OK.
+func TestImageWarning(t *testing.T) {
+	port := fakeProxy(t)
+	for _, tc := range []struct {
+		running, want, warn string
+	}{
+		{"ghcr.io/stormlantern-dev/berthlight:0.8.1", "ghcr.io/stormlantern-dev/berthlight:0.8.2", "runs ghcr.io/stormlantern-dev/berthlight:0.8.1, but this berthlight wants ghcr.io/stormlantern-dev/berthlight:0.8.2; replace it with: berthlight up"},
+		{"ghcr.io/stormlantern-dev/berthlight:0.8.2", "ghcr.io/stormlantern-dev/berthlight:0.8.2", ""},
+		{"localhost/berthlight:test", "berthlight:test", ""},
+		{"ghcr.io/stormlantern-dev/berthlight:0.8.1", "", ""}, // no image to compare with
+	} {
+		f := healthy("ok")
+		f.image = tc.running
+		c := checker(f, port)
+		c.Image = tc.want
+		rep := c.Check(context.Background(), table("ok"))
+		if tc.warn == "" && rep.Warning != "" || !strings.Contains(rep.Warning, tc.warn) {
+			t.Errorf("%s for %s: warning %q, want %q", tc.running, tc.want, rep.Warning, tc.warn)
+		}
+		if !rep.OK() {
+			t.Errorf("%s for %s: report not OK: %+v", tc.running, tc.want, rep)
+		}
 	}
 }

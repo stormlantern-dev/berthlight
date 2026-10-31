@@ -79,6 +79,32 @@ func (r Runtime) PullImage(image string) error {
 	return err
 }
 
+// ContainerImage returns the image a container was created from, as the
+// runtime names it.
+func (r Runtime) ContainerImage(name string) (string, error) {
+	out, err := r.Run("container", "inspect", "--format", "{{.Config.Image}}", name)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// SameImage reports whether two image references name the same image. The
+// runtimes spell some references out (Podman's localhost/ for a local
+// image, docker.io/library/ for Docker Hub, an implied :latest), so those
+// spellings count as equal.
+func SameImage(a, b string) bool { return normImage(a) == normImage(b) }
+
+func normImage(s string) string {
+	for _, p := range []string{"docker.io/", "library/", "localhost/"} {
+		s = strings.TrimPrefix(s, p)
+	}
+	if last := s[strings.LastIndex(s, "/")+1:]; !strings.ContainsAny(last, ":@") {
+		s += ":latest"
+	}
+	return s
+}
+
 // StartProxy creates the proxy's own network and runs the proxy on it. It
 // tries the most specific options first and falls back where the runtime
 // does not support them: gw-priority (Docker 28+) and a ::1 binding.
