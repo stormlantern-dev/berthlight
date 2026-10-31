@@ -42,6 +42,10 @@ release notes say how to verify them. The proxy image,
 macOS binaries are signed with a Developer ID and notarized by Apple, so a
 downloaded archive runs without a Gatekeeper warning (v0.8.1 and later).
 
+After an upgrade, run `berthlight up`. The proxy that is running is still
+the old version: `up` replaces it with the new one, and the routes stay.
+`berthlight status` warns until then.
+
 winget is on its way: `winget install Stormlantern.Berthlight` works once
 the package is accepted in
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Until then,

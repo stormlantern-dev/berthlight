@@ -174,9 +174,13 @@ func runAdd(o addOptions, pos []string, stdout, stderr io.Writer) error {
 		}
 	}
 	boat := tui.Start(stderr, "starting the proxy")
-	if err := up(c, run, boat); err != nil {
+	replaced, err := up(c, run, boat)
+	if err != nil {
 		boat.Fail(err.Error())
 		return err
+	}
+	if replaced != "" {
+		defer fmt.Fprintf(stderr, "berthlight: replaced proxy %s: %s -> %s\n", c.ProxyName, replaced, c.Image)
 	}
 	boat.Step(0.9, "joining "+r.Network())
 	if err := run.EnsureNetwork(r.Network(), "route"); err != nil {
@@ -330,7 +334,7 @@ func removeRoute(c Config, run rt.Runtime, tab *route.Table, r route.Route, stde
 			if err := run.RemoveContainer(c.ProxyName); err != nil {
 				return err
 			}
-			if err := up(c, run, nil); err != nil {
+			if _, err := up(c, run, nil); err != nil {
 				return err
 			}
 		}
@@ -408,6 +412,12 @@ to every route's network. A proxy that is already running stays, and joins
 any network it is missing. add starts the proxy too, so up is for after a
 reboot, after 'berthlight down', or when status says the proxy is gone.
 
+After an upgrade the running proxy is still the old one. When it runs
+another image than this berthlight wants (its own version's, or
+BERTHLIGHT_IMAGE), up gets the new image first and then replaces the proxy;
+the routes stay. If the new image can't be had, the old proxy keeps
+running.
+
 The port is BERTHLIGHT_PORT (default 7480); the container is named
 BERTHLIGHT_PROXY_NAME (default berthlight). To change either, or
 BERTHLIGHT_BASE, run 'berthlight down' first: a running proxy keeps what it
@@ -432,11 +442,15 @@ func runUp(stdout, stderr io.Writer) error {
 		return err
 	}
 	boat := tui.Start(stderr, "starting the proxy")
-	if err := up(c, run, boat); err != nil {
+	replaced, err := up(c, run, boat)
+	if err != nil {
 		boat.Fail(err.Error())
 		return err
 	}
 	boat.Done("proxy berthed")
+	if replaced != "" {
+		fmt.Fprintf(stdout, "proxy %s replaced: %s -> %s\n", c.ProxyName, replaced, c.Image)
+	}
 	fmt.Fprintf(stdout, "proxy %s listening on 127.0.0.1:%d\n", c.ProxyName, c.Port)
 	return nil
 }
@@ -446,48 +460,65 @@ func runUp(stdout, stderr io.Writer) error {
 // on the networks it has at start (see proxy.ListenStartupInterfaces), so it
 // must start on its own network alone.
 //
+// A running proxy on another image than c.Image, as after an upgrade, is
+// replaced (#70), once the new image is there; replaced is then the image
+// it ran.
+//
 // boat, which may be nil, shows the progress.
-func up(c Config, run rt.Runtime, boat *tui.Progress) error {
+func up(c Config, run rt.Runtime, boat *tui.Progress) (replaced string, err error) {
 	boat.Step(0.05, "looking for the proxy")
 	exists, running := run.ContainerState(c.ProxyName)
 	if exists && !running {
 		if err := run.RemoveContainer(c.ProxyName); err != nil {
-			return err
+			return "", err
 		}
 		exists = false
 	}
+	if exists {
+		if img, err := run.ContainerImage(c.ProxyName); err == nil && !rt.SameImage(img, c.Image) {
+			boat.Step(0.08, "getting the proxy image "+c.Image)
+			if err := run.PullImage(c.Image); err != nil {
+				return "", fmt.Errorf("%w\nthe proxy keeps running %s", imageError(c.Image, os.Getenv("BERTHLIGHT_IMAGE") != "", err), img)
+			}
+			boat.Step(0.1, "replacing the proxy on "+img)
+			if err := run.RemoveContainer(c.ProxyName); err != nil {
+				return "", err
+			}
+			exists, replaced = false, img
+		}
+	}
 	if !exists {
 		if err := route.MakeDir(c.StateDir); err != nil {
-			return err
+			return "", err
 		}
 		boat.Step(0.1, "getting the proxy image")
 		if err := run.PullImage(c.Image); err != nil {
-			return imageError(c.Image, os.Getenv("BERTHLIGHT_IMAGE") != "", err)
+			return "", imageError(c.Image, os.Getenv("BERTHLIGHT_IMAGE") != "", err)
 		}
 		spec := rt.ProxySpec{Name: c.ProxyName, Image: c.Image, HostPort: c.Port, StateDir: c.StateDir, Bases: c.Bases, Group: run.ProxyGroup()}
 		boat.Step(0.15, "starting the proxy")
 		if err := run.StartProxy(spec); err != nil {
-			return err
+			return "", err
 		}
 		boat.Step(0.5, "waiting for 127.0.0.1:"+strconv.Itoa(c.Port))
 		if err := waitForPort(c.Port, 10*time.Second); err != nil {
-			return err
+			return "", err
 		}
 	}
 	tab, err := route.Load(c.StateDir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for i, r := range tab.Routes {
 		boat.Step(0.6+0.3*float64(i)/float64(len(tab.Routes)), "joining "+r.Network())
 		if err := run.EnsureNetwork(r.Network(), "route"); err != nil {
-			return err
+			return "", err
 		}
 		if err := run.Connect(r.Network(), c.ProxyName); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return replaced, nil
 }
 
 // imageError explains a proxy image that can't be had: one named by
@@ -499,8 +530,8 @@ func imageError(image string, fromEnv bool, err error) error {
 	case fromEnv:
 		why = "BERTHLIGHT_IMAGE names it; set it to an image the runtime can pull or already has"
 	case strings.HasSuffix(image, ":edge"):
-		why = fmt.Sprintf("this is a development build (version %s), and the edge image for those isn't published yet (#63); "+
-			"set BERTHLIGHT_IMAGE to a released image, such as %s, or to one you built",
+		why = fmt.Sprintf("this is a development build (version %s), which runs the edge image built from main; "+
+			"check the network, or set BERTHLIGHT_IMAGE to a released image, such as %s, or to one you built",
 			strings.Trim(currentVersion(), "()"), strings.TrimSuffix(image, ":edge")+":latest")
 	default:
 		why = "check the network and the registry, or set BERTHLIGHT_IMAGE to an image the runtime already has"

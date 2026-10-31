@@ -33,7 +33,9 @@ wrong and what to do about it: the proxy container is missing or stopped,
 nothing answers on 127.0.0.1:<port>, a route's network is missing or the
 proxy is not on it, no container answers to the route's alias, nothing
 listens on its port, a name does not resolve to this machine, or the
-certificate does not verify.
+certificate does not verify. It also warns when the proxy runs another
+image than this berthlight wants, as after an upgrade; 'berthlight up'
+replaces it.
 
 It exits 0 when everything works and 1 when something does not, so
 scripts and agents can wait on it.
@@ -44,7 +46,7 @@ and a desktop notification says when a route comes up or goes down.
 Without a terminal it prints one line per change, for logs.
 
 --json prints one check as JSON, for scripts and agents: "ok", the
-"proxy" (name, port, ok, problem) and the "routes", as in 'ls --json' with
+"proxy" (name, port, ok, problem, warning) and the "routes", as in 'ls --json' with
 "ok" and "detail". Those field names stay.`,
 		Example: `  berthlight status
   berthlight status --watch      # in a second tab, while the devcontainers start
@@ -128,7 +130,7 @@ func newRouteJSON(c Config, r route.Route) routeJSON {
 }
 
 func newChecker(c Config, run rt.Runtime) status.Checker {
-	return status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases, HTTPS: scheme(c) == "https"}
+	return status.Checker{Runtime: run, Bin: run.Bin, ProxyName: c.ProxyName, Port: c.Port, Bases: c.Bases, Image: c.Image, HTTPS: scheme(c) == "https"}
 }
 
 // proxyJSON is the proxy in `status --json`.
@@ -137,6 +139,7 @@ type proxyJSON struct {
 	Port    int    `json:"port"`
 	OK      bool   `json:"ok"`
 	Problem string `json:"problem,omitempty"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // statusOut is `status --json`, and the MCP status tool's result.
@@ -149,7 +152,7 @@ type statusOut struct {
 func statusJSON(c Config, rep status.Report) statusOut {
 	out := statusOut{
 		OK:     rep.OK(),
-		Proxy:  proxyJSON{Name: c.ProxyName, Port: c.Port, OK: rep.Proxy == "", Problem: rep.Proxy},
+		Proxy:  proxyJSON{Name: c.ProxyName, Port: c.Port, OK: rep.Proxy == "", Problem: rep.Proxy, Warning: rep.Warning},
 		Routes: []routeJSON{},
 	}
 	for _, rs := range rep.Routes {
@@ -174,6 +177,9 @@ func writeReport(w io.Writer, term tui.Term, c Config, rep status.Report, width 
 		fmt.Fprintf(w, "proxy: %s\n", fit(rep.Proxy, width-len("proxy: ")))
 	} else {
 		fmt.Fprintf(w, "proxy: %s listening on 127.0.0.1:%d\n", c.ProxyName, c.Port)
+	}
+	if rep.Warning != "" {
+		fmt.Fprintf(w, "warning: %s\n", fit(rep.Warning, width-len("warning: ")))
 	}
 	if len(rep.Routes) == 0 {
 		fmt.Fprintln(w, "No routes. Add one with: berthlight add <name> <port>")

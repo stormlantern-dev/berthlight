@@ -19,6 +19,7 @@ import (
 	"stormlantern.nl/berthlight/internal/naming"
 	"stormlantern.nl/berthlight/internal/proxy"
 	"stormlantern.nl/berthlight/internal/route"
+	rt "stormlantern.nl/berthlight/internal/runtime"
 )
 
 // Runtime is what status needs from the container runtime.
@@ -26,6 +27,7 @@ type Runtime interface {
 	ContainerState(name string) (exists, running bool)
 	ContainerNetworks(name string) ([]string, error)
 	NetworkExists(name string) bool
+	ContainerImage(name string) (string, error)
 }
 
 // Checker checks berthlight's state.
@@ -35,6 +37,9 @@ type Checker struct {
 	ProxyName string
 	Port      int
 	Bases     []string
+	// Image is the proxy image this berthlight wants. When set, a proxy on
+	// another image, as after an upgrade, gets a warning (#70).
+	Image string
 	// HTTPS: a certificate covers the names (R7), so URLs are https and
 	// probes go over TLS, since the proxy redirects plain HTTP.
 	HTTPS bool
@@ -54,8 +59,12 @@ type Checker struct {
 // Report is the outcome of a check.
 type Report struct {
 	// Proxy is empty when the proxy runs and answers, else what is wrong.
-	Proxy  string
-	Routes []RouteStatus
+	Proxy string
+	// Warning is about a proxy that works but needs attention: it runs
+	// another image than this berthlight wants. It does not make the
+	// report fail.
+	Warning string
+	Routes  []RouteStatus
 }
 
 // OK reports whether the proxy and every route work.
@@ -98,6 +107,11 @@ func (c Checker) Check(ctx context.Context, t *route.Table) Report {
 		var err error
 		if nets, err = c.Runtime.ContainerNetworks(c.ProxyName); err != nil {
 			rep.Proxy = fmt.Sprintf("cannot read the proxy's networks: %v", err)
+		}
+	}
+	if rep.Proxy == "" && c.Image != "" {
+		if img, err := c.Runtime.ContainerImage(c.ProxyName); err == nil && !rt.SameImage(img, c.Image) {
+			rep.Warning = fmt.Sprintf("the proxy runs %s, but this berthlight wants %s; replace it with: berthlight up", img, c.Image)
 		}
 	}
 	rep.Routes = make([]RouteStatus, len(t.Routes))
