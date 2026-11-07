@@ -36,9 +36,10 @@ paru -S berthlight-bin                                       # Arch
 
 Debian, Fedora and Alpine packages and plain archives are on each
 [release](https://github.com/stormlantern-dev/berthlight/releases). Every
-release has checksums signed with cosign and GitHub build provenance; the
-release notes say how to verify them. The proxy image,
-`ghcr.io/stormlantern-dev/berthlight:<version>`, is signed the same way. The
+release has checksums signed with cosign, GitHub build provenance, and an
+attested SPDX SBOM per archive; the release notes say how to verify them.
+The proxy image, `ghcr.io/stormlantern-dev/berthlight:<version>`, is signed
+the same way and has an SBOM per platform. The
 macOS binaries are signed with a Developer ID and notarized by Apple, so a
 downloaded archive runs without a Gatekeeper warning (v0.8.1 and later).
 

@@ -16,13 +16,18 @@ order:
    fails, nothing is published.
 2. **`release`:** GoReleaser publishes the archives, the packages, the
    Homebrew cask, the Scoop manifest, the AUR package and the proxy image,
-   with signed checksums and build provenance.
-3. **The install jobs:** install the release the way users do, with `brew`
+   with signed checksums, build provenance, and an SBOM attestation per
+   image platform.
+3. **`sbom-archives`:** for each archive, downloads it and its SBOM from the
+   release, checks them against `checksums.txt`, attests the SBOM for the
+   archive and verifies that attestation.
+4. **The install jobs:** install the release the way users do, with `brew`
    (macOS and Linux), `scoop`, `dpkg` and the image, and run it.
 
 Afterwards, check:
 - the checksums;
-- `gh attestation verify` on the archives;
+- `gh attestation verify` on the archives, once plain (provenance) and
+  once with `--predicate-type https://spdx.dev/Document/v2.3` (SBOM);
 - that `proxy.golang.org` lists the version.
 
 ## Credentials
