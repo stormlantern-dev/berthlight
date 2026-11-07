@@ -77,6 +77,14 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# An SPDX SBOM per archive, made by syft from the archive's contents (#75):
+# <archive>.sbom.json. They go on the release and into checksums.txt, so the
+# signed checksums cover them; the sbom-archives job in release.yml attests
+# each one for its archive. Needs syft on PATH, in CI as in the release.
+sboms:
+  - id: archives
+    artifacts: archive
+
 # Keyless: the signature is bound to the release workflow's identity.
 # Verify with:
 #   cosign verify-blob --bundle checksums.txt.sigstore.json \
@@ -276,3 +284,12 @@ release:
     ```
 
     Or with GitHub's build provenance: `gh attestation verify <file> --repo stormlantern-dev/berthlight`.
+
+    Each archive has an SPDX SBOM, `<archive>.sbom.json`, attested for that archive:
+
+    ```sh
+    gh attestation verify <archive> --repo stormlantern-dev/berthlight \
+      --predicate-type https://spdx.dev/Document/v2.3
+    ```
+
+    The proxy image `ghcr.io/stormlantern-dev/berthlight:{{ .Version }}` has an SBOM per platform: verify it the same way with `oci://ghcr.io/stormlantern-dev/berthlight:{{ .Version }}`.

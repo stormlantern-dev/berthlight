@@ -4,7 +4,8 @@
 # a build from source starts a proxy without BERTHLIGHT_IMAGE.
 #
 # Like the release image: linux/amd64 and linux/arm64, from
-# Dockerfile.release, signed keyless with cosign and with build provenance.
+# Dockerfile.release, signed keyless with cosign, with build provenance and
+# an SBOM attestation per platform (#75).
 # The signature is bound to this workflow on main:
 #
 #   cosign verify ghcr.io/stormlantern-dev/berthlight:edge \
@@ -105,6 +106,34 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+      # As for the release image: one SBOM per platform, both attested for
+      # the digest edge points at (#75).
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        if: ${{ !github.event.repository.private }}
+      - name: SBOMs for the image
+        if: ${{ !github.event.repository.private }}
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          for arch in amd64 arm64; do
+            syft scan "registry:$IMAGE@$DIGEST" --platform "linux/$arch" -o "spdx-json=$RUNNER_TEMP/image-linux-$arch.spdx.json"
+          done
+      - name: SBOM attestation for the image (linux/amd64)
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/image-linux-amd64.spdx.json
+          push-to-registry: true
+      - name: SBOM attestation for the image (linux/arm64)
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/image-linux-arm64.spdx.json
+          push-to-registry: true
 
   # #63: a berthlight built from this commit, with no BERTHLIGHT_IMAGE,
   # starts a proxy from the edge image just published, on both
@@ -119,6 +148,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -135,6 +165,14 @@ jobs:
           cosign verify "$IMAGE@${{ needs.publish.outputs.digest }}" \
             --certificate-identity "https://github.com/${WORKFLOW_REF%@*}@refs/heads/main" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+      - name: The edge image has an SBOM per platform
+        if: ${{ !github.event.repository.private }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh attestation verify "oci://$IMAGE@${{ needs.publish.outputs.digest }}" --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3 --format json | jq length)
+          test "$n" -ge 2 || { echo "::error::expected an SBOM per platform, found $n"; exit 1; }
       - name: A build from main starts the edge proxy
         run: |
           go build -o "$RUNNER_TEMP/bin/berthlight" ./cmd/berthlight

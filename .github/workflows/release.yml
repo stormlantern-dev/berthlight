@@ -127,6 +127,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # The archive SBOMs (GoReleaser) and the image SBOMs (below) (#75).
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - name: Mint a token for the tap and the bucket
         id: app_token
         uses: ./.github/actions/app-token
@@ -213,6 +215,76 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
+      # One SBOM per platform, both attested for the digest the tag points
+      # at, so `gh attestation verify oci://$IMAGE:<version>` finds them (#75).
+      - name: SBOMs for the image
+        if: ${{ !github.event.repository.private }}
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          for arch in amd64 arm64; do
+            syft scan "registry:$IMAGE@$DIGEST" --platform "linux/$arch" -o "spdx-json=$RUNNER_TEMP/image-linux-$arch.spdx.json"
+          done
+      - name: SBOM attestation for the image (linux/amd64)
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/image-linux-amd64.spdx.json
+          push-to-registry: true
+      - name: SBOM attestation for the image (linux/arm64)
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/image-linux-arm64.spdx.json
+          push-to-registry: true
+
+  # #75: an SBOM attestation per archive, for the file as it is on the
+  # release, after checking it against checksums.txt. One job per archive,
+  # as actions/attest takes one SBOM; the targets are the builds in
+  # .goreleaser.yaml (CI checks there are six).
+  sbom-archives:
+    needs: release
+    if: ${{ !github.event.repository.private }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux_amd64, linux_arm64, darwin_amd64, darwin_arm64, windows_amd64, windows_arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # keyless attestation
+      attestations: write
+    steps:
+      - name: Download the archive, its SBOM and the checksums
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          ext=tar.gz
+          case "$TARGET" in windows_*) ext=zip ;; esac
+          archive="berthlight_${GITHUB_REF_NAME#v}_${TARGET}.${ext}"
+          gh release download "$GITHUB_REF_NAME" -p "$archive" -p "$archive.sbom.json" -p checksums.txt
+          grep -qF "  $archive" checksums.txt && grep -qF "  $archive.sbom.json" checksums.txt
+          sha256sum --check --ignore-missing --strict checksums.txt
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.files.outputs.archive }}
+          sbom-path: ${{ steps.files.outputs.archive }}.sbom.json
+      - name: The SBOM attestation verifies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARCHIVE: ${{ steps.files.outputs.archive }}
+        run: |
+          gh attestation verify "$ARCHIVE" --repo "$GH_REPO" \
+            --predicate-type https://spdx.dev/Document/v2.3 > /dev/null
 
   # R9 fit: install the release as users do and run it.
   install-deb:
@@ -282,6 +354,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      attestations: read
     steps:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -296,6 +369,15 @@ jobs:
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
           docker run --rm --entrypoint /berthlight "$ref" version | grep -F "${GITHUB_REF_NAME#v}"
+      # #75: one SBOM per platform.
+      - name: Verify the image SBOMs
+        if: ${{ !github.event.repository.private }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh attestation verify "oci://$IMAGE:${GITHUB_REF_NAME#v}" --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3 --format json | jq length)
+          test "$n" -ge 2 || { echo "::error::expected an SBOM per platform, found $n"; exit 1; }
 
   # R10: install the release from its winget manifests before submitting
   # them; winget-pkgs' checklist asks for `winget validate` and
